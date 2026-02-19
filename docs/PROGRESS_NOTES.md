@@ -1,7 +1,7 @@
 # Arena Race MVP — Progress Notes
 
 **Purpose:** Record of what has been achieved so far, aligned with the Execution Plan v1.0 and TDD v1.1 (LOCKED).  
-**Updated:** As of completion of Phase 3 through Step 7 (engine + determinism).
+**Updated:** As of completion of Phase 12 Step 20 (pre-mainnet checklist).
 
 ---
 
@@ -16,9 +16,21 @@
 | 2 | 5 — Deploy to Testnet | ✅ Complete | Sepolia deploy + runbook; 50-match sim available. |
 | 3 | 6 — resolveTurn() (pure engine) | ✅ Complete | movement, trap, zone, overtake, survival, scoring, tie-break. |
 | 3 | 7 — Determinism & replay test | ✅ Complete | 1,000× identical output; replay reproduces result. |
-| 4+ | 8 onward | ⏳ Not started | Entry flow, queue, turn timer, etc. |
+| 4 | 8 — Connect backend to contract | ✅ Complete | Entry flow; start only when Escrowed; expire → triggerRefund. |
+| 5 | 9 — Queue logic | ✅ Complete | In-memory FIFO; pop 4; merge 180s, timeout 240s. |
+| 5 | 10 — Turn timer | ✅ Complete | 6 s window; late → default; tests. |
+| 6 | 11 — Consecutive 4th tracker | ✅ Complete | 3 consecutive 4th → token; 7-day expiry; max 1 active. |
+| 6 | 12 — Free entry funding flow | ✅ Complete | Treasury tops up when free token used; token consumed. |
+| 7 | 13 — Co-occurrence & win-rate flags | ✅ Complete | N_together ≥15, avg≤2.2; ≥80% 1st/50; no false positive &lt;20. |
+| 8 | 14 — Replay tool | ✅ Complete | replayMatch; tamper detected; REPLAY_RUNBOOK.md. |
+| 9 | 15 — 1,000-match simulation | ✅ Complete | Random legal actions; placement 1–4; survival cap 75; overtake cap 8. |
+| 9 | 16 — Concurrency stress | ✅ Complete | 4 and 8 simultaneous matches; all valid; no crash. |
+| 10 | 17 — Key management | ✅ Complete | KEY_MANAGEMENT_RUNBOOK.md; HSM/secret manager; multisig; signer rotation. |
+| 10 | 18 — Red-team pass | ✅ Complete | RED_TEAM_SCENARIOS.md; signature-replay test; all scenarios documented. |
+| 12 | 20 — Pre-mainnet checklist | ✅ Complete | PRE_MAINNET_CHECKLIST.md; 9 items with verification and evidence. |
+| 11+ | 19, 21 onward | ⏳ Not started | Audit (external); mainnet deploy, launch. |
 
-**Critical path:** Spec freeze → Contract → Tests → Testnet deploy ✅ **done.** Engine ✅ **done.** Next: Step 8 — Connect backend to contract (entry flow).
+**Critical path:** Through Step 20 ✅ **done.** Next: Step 19 — Contract audit (provide TDD, coverage); Step 21 — Deploy to mainnet.
 
 ---
 
@@ -118,6 +130,117 @@
 
 ---
 
+## Phase 4 — Entry Flow + Escrow Integration
+
+### Step 8 — Connect Backend to Contract
+- **Deliverables:** `arena-race/backend/entry/`
+- **Implemented (TDD §7.7):**
+  - **types.ts:** EscrowMatchStatus (aligned with contract enum), MatchRecord, IEscrowAdapter.
+  - **entryFlow.ts:** checkEntryFlow(adapter, matchId, entryDeadline, now) → shouldStart only when Escrowed; triggerRefund when past deadline and still PendingEntries; never start for PendingEntries/Expired/Refunded.
+  - **entryFlow.test.ts:** 4 players pay → Escrowed → shouldStart true; 1 never pays → shouldStart false; entry expires → triggerRefund; server never starts for Expired/Refunded.
+- **Run:** `npm test` in `arena-race/backend` (11 suites, 34 tests).
+
+---
+
+## Phase 5 — Queue & Turn Timing
+
+### Step 9 — Implement Queue Logic
+- **Deliverables:** `arena-race/backend/queue/`
+- **Implemented (TDD §7.1–7.5):**
+  - **types.ts:** Tier (bronze-10, bronze-25), QueueEntry, MERGE_PROMPT_AFTER_MS 180s, QUEUE_TIMEOUT_MS 240s.
+  - **queueService.ts:** QueueService (join, leave, tryFormMatch), IQueueStore, InMemoryQueueStore; FIFO pop 4 → create match; shouldShowMergePrompt (180s for bronze-25); isQueueTimeout (240s).
+- **queueService.test.ts:** tryFormMatch null when <4; FIFO pop 4; merge 180s; timeout 240s; leave removes.
+
+### Step 10 — Implement Turn Timer
+- **Deliverables:** `arena-race/backend/engine/turnTimer.ts`
+- **Implemented (TDD §4.3):**
+  - TURN_WINDOW_MS = 6000; isActionOnTime(receivedAt, turnDeadline); resolveAction(submitted, receivedAt, turnStartTime, currentPositions, playerIndex) → use submitted if on time, else defaultAction.
+- **turnTimer.test.ts:** accept when receivedAt ≤ deadline; reject late; default when late; on-time uses submitted; simultaneous before deadline accepted.
+
+---
+
+## Phase 6 — Bronze Retention Cushion
+
+### Step 11 — Consecutive 4th Tracker
+- **Deliverables:** `arena-race/backend/bronze/`
+- **Implemented (TDD §8):** consecutiveFourth.ts (recordBronzeMatchResult, canUseFreeToken), types.ts (BronzeToken, IBronzeStore), inMemoryBronzeStore.ts. After 3 consecutive 4th (paid) → grant token; 7-day expiry; max 1 active; no stacking; reset on non-4th.
+- **consecutiveFourth.test.ts:** reset on non-4th; increment on 4th; grant after 3; no stacking; free_token doesn’t increment; expiry; consume.
+
+### Step 12 — Free Entry Funding Flow
+- **Deliverables:** `arena-race/backend/bronze/freeEntry.ts`
+- **Implemented (TDD §8.2):** getFreeEntryPlayerIndex, shouldTreasuryFundEntry (treasury sends 10 USDC for that player so contract receives 4×10), useFreeTokenIfEligible (consume on use).
+- **freeEntry.test.ts:** index of free user; treasury funds only that index; token consumed on use; expiry.
+
+---
+
+## Phase 7 — Anti-Collusion (MVP)
+
+### Step 13 — Co-Occurrence and Win-Rate Flags
+- **Deliverables:** `arena-race/backend/flags/`
+- **Implemented (TDD §9):** coOccurrence.ts (rolling 200, N_together ≥15, avg(min(place)) ≤2.2), winRate.ts (≥20 matches, ≥80% 1st over 50); insert review_flags (return list); no auto-restrict.
+- **flags.test.ts:** co-occurrence flags pair; no false positive when N&lt;15; win-rate flags at 80%; no false positive when &lt;20 matches.
+
+---
+
+## Phase 8 — Replay & Dispute
+
+### Step 14 — Replay Tool
+- **Deliverables:** `arena-race/backend/replay/`, `docs/REPLAY_RUNBOOK.md`
+- **Implemented (TDD §13):** replay.ts — replayMatch(turns, storedPlacement), replayMatchStrict(turns); compare final placement; tamper → mismatch.
+- **replay.test.ts:** replay reproduces placement; wrong stored placement → mismatch; tampered action → strict detects mismatch.
+- **REPLAY_RUNBOOK.md:** load match → replay → approve or correct payout; tamper check.
+
+---
+
+## Phase 9 — Stress & Simulation
+
+### Step 15 — 1,000-Match Simulation
+- **Deliverables:** `arena-race/backend/simulation/runMatch.ts`, `run1000Matches.test.ts`
+- **Implemented:** runOneMatch(options) with random legal actions (moves in [0, TILES-1]); assertMatchResultValid checks placement 1–4, survival ≤75, overtake ≤8.
+- **Test:** Runs 1,000 matches; all pass checks; no stuck state.
+
+### Step 16 — Concurrency Stress
+- **Deliverables:** `arena-race/backend/stress/concurrencyStress.test.ts`
+- **Implemented:** Promise.all for 4 then 8 simultaneous runOneMatch(); each result asserted valid.
+- **Done when:** Stress runs pass; no crash.
+
+---
+
+## Phase 10 — Security Hardening
+
+### Step 17 — Key Management
+- **Deliverable:** `docs/KEY_MANAGEMENT_RUNBOOK.md`
+- **Content:** Result signer key in HSM or secret manager (not code/env); multisig for pause and setResultSigner; signer rotation procedure and dry run on testnet.
+- **Done when:** Runbook in place; ops can follow for key storage and rotation.
+
+### Step 18 — Red-Team Pass
+- **Deliverable:** `docs/RED_TEAM_SCENARIOS.md` + contract test
+- **Scenarios:** Double entry, reentrancy, signature replay, expired match forced resolution, entry window race, late submitResult — each documented with handling and test reference.
+- **Contract test added:** `ArenaRaceEscrow.test.ts` — "red-team: signature for match A cannot be used for match B (replay)".
+- **Done when:** All scenarios handled or documented; signature-replay test passes.
+
+---
+
+## Phase 12 — Production Readiness Gate
+
+### Step 20 — Pre-Mainnet Checklist
+- **Deliverable:** `docs/PRE_MAINNET_CHECKLIST.md`
+- **Content:** Nine requirements that must be TRUE before mainnet:
+  1. 100+ testnet matches successful
+  2. Entry expiration verified
+  3. Refund verified
+  4. Tie payout verified
+  5. Pause tested
+  6. Signer rotation tested
+  7. Replay verified
+  8. 1,000 sim matches clean
+  9. No unresolved critical bug
+- Each item has “How to verify” and “Evidence / reference” (contract tests, scripts, runbooks).
+- Sign-off placeholder for tech lead.
+- **Done when:** Checklist document complete; tech lead verifies and checks each item before mainnet.
+
+---
+
 ## Supporting Work (Environment & Ops)
 
 - **Env variables:**
@@ -154,6 +277,37 @@ arena-race/
       scoring.test.ts
       resolveTurn.test.ts
       determinism.test.ts
+      turnTimer.ts
+      turnTimer.test.ts
+    entry/
+      types.ts
+      entryFlow.ts
+      entryFlow.test.ts
+    queue/
+      types.ts
+      queueService.ts
+      queueService.test.ts
+    bronze/
+      types.ts
+      consecutiveFourth.ts
+      inMemoryBronzeStore.ts
+      consecutiveFourth.test.ts
+      freeEntry.ts
+      freeEntry.test.ts
+    flags/
+      types.ts
+      coOccurrence.ts
+      winRate.ts
+      flags.test.ts
+    replay/
+      types.ts
+      replay.ts
+      replay.test.ts
+    simulation/
+      runMatch.ts
+      run1000Matches.test.ts
+    stress/
+      concurrencyStress.test.ts
     package.json
     jest.config.js
     tsconfig.json
@@ -175,6 +329,10 @@ docs/
   Implementation_Backlog.md
   STEP5_Testnet_Deploy.md
   ENV_SETUP.md
+  REPLAY_RUNBOOK.md
+  KEY_MANAGEMENT_RUNBOOK.md
+  RED_TEAM_SCENARIOS.md
+  PRE_MAINNET_CHECKLIST.md
   PROGRESS_NOTES.md   (this file)
   MVP_Execution_Plan.md
   ARENA_RACE_TECHNICAL_DESIGN.md
@@ -184,9 +342,9 @@ docs/
 
 ## Next Steps (Execution Plan)
 
-- **Step 8 — Connect backend to contract:** Entry flow; start match only when contract status = Escrowed; handle expiration/refund. Test: 4 players pay → Escrowed → match starts; 1 never pays → expire → refund; entry deadline 5 min.
-- **Step 9 — Implement queue logic:** Redis Bronze-10/Bronze-25; FIFO pop 4 → create match; 180 s merge, 240 s timeout; entry deadline aligned with contract.
-- **Step 10 — Turn timer:** 6 s window; accept action only if receivedAt ≤ turnDeadline; default no-op; disconnect handling.
+- **Step 19 — Contract audit:** Provide TDD, coverage, edge-case list, state diagram; fix critical/high (external).
+- **Step 21 — Deploy contract to mainnet:** Deploy; verify; configure multisig; set resultSigner; run 1 live internal match.
+- **Step 22–23 — Soft launch; open public Phase 1a.**
 
 ---
 

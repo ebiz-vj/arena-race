@@ -7,7 +7,7 @@
 import { ethers } from "hardhat";
 
 const ENTRY_AMOUNT = ethers.parseUnits("10", 6);
-const MATCH_COUNT = 50;
+const MATCH_COUNT = Math.min(150, Math.max(50, parseInt(process.env.MATCH_COUNT || "100", 10)));
 
 function matchId(seed: number): string {
   return ethers.keccak256(ethers.toBeArray(seed));
@@ -85,7 +85,7 @@ async function main() {
   await escrow.connect(accounts[1]).claimRefund(expId);
   if (Number((await escrow.matches(expId)).status) !== 3) throw new Error("Not Refunded");
   console.log("Expiration + refund verified.");
-  console.log("Step 5 simulation: 50 matches + expiration OK.");
+  console.log(`Step 5 simulation: ${MATCH_COUNT} matches + expiration OK.`);
 }
 
 main().catch((err) => {

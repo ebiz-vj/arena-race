@@ -258,6 +258,29 @@ describe("ArenaRaceEscrow", function () {
         escrow.submitResultWithPlacement(MATCH_ID, placement, wrongSig)
       ).to.be.revertedWithCustomError(escrow, "InvalidSignature");
     });
+
+    it("red-team: signature for match A cannot be used for match B (replay)", async function () {
+      const { escrow, usdc, owner, signer, a, b, c, d } = await loadFixture(deployFixture);
+      const MATCH_ID_2 = ethers.keccak256(ethers.toUtf8Bytes("match-2"));
+      await escrow.connect(owner).createMatch(MATCH_ID, ENTRY_AMOUNT);
+      await escrow.connect(owner).createMatch(MATCH_ID_2, ENTRY_AMOUNT);
+      for (const account of [a, b, c, d]) {
+        await usdc.connect(account).approve(await escrow.getAddress(), ENTRY_AMOUNT * 2n);
+        await escrow.connect(account).submitEntry(MATCH_ID, ENTRY_AMOUNT);
+        await escrow.connect(account).submitEntry(MATCH_ID_2, ENTRY_AMOUNT);
+      }
+      const placement = [0, 1, 2, 3];
+      const messageHash = ethers.keccak256(
+        ethers.solidityPacked(
+          ["bytes32", "uint8", "uint8", "uint8", "uint8"],
+          [MATCH_ID, placement[0], placement[1], placement[2], placement[3]]
+        )
+      );
+      const sigForMatch1 = await signer.signMessage(ethers.getBytes(messageHash));
+      await expect(
+        escrow.submitResultWithPlacement(MATCH_ID_2, placement, sigForMatch1)
+      ).to.be.revertedWithCustomError(escrow, "InvalidSignature");
+    });
   });
 
   describe("submitResult with payout amounts (tie-split)", function () {
