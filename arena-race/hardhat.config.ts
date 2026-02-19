@@ -23,6 +23,10 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {},
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 31337,
+    },
     sepolia: {
       url: SEPOLIA_RPC,
       accounts: DEPLOYER_PK ? [DEPLOYER_PK] : [],

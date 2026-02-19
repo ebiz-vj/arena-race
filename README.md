@@ -146,6 +146,8 @@ docs/
 | `npm run deploy:sepolia` | Deploy to Sepolia (needs .env). |
 | `npm run deploy:local` | Deploy on Hardhat + run 100 matches + expiration. |
 | `npm run verify:checklist` | Full pre-mainnet verification (contract + backend + 100 matches). |
+| `npm run deploy:localhost` | Deploy to a running Hardhat node (localhost:8545); writes addresses for the webapp. |
+| `npx hardhat run contracts/scripts/e2e-localhost-flow.ts` | E2E: create match, 4 entries, submit result, verify status and payouts (no UI). |
 
 **Backend (from `arena-race/backend/`):**
 
@@ -154,6 +156,56 @@ docs/
 | `npm test` | All backend tests. |
 | `npm test -- --testPathPattern=replay` | Replay tests only. |
 | `npm test -- --testPathPattern=run1000Matches` | 1,000-match simulation only. |
+
+---
+
+## Test on localhost (game platform UI)
+
+Run the chain, deploy contracts, and open the web UI to create matches, enter, and resolve.
+
+**1. Start the local chain (leave this terminal open):**
+
+```bash
+cd arena-race
+npm run node:localhost
+```
+
+Wait until you see **"Started HTTP and WebSocket JSON-RPC server at http://127.0.0.1:8545/"** before running deploy.
+
+**2. In a second terminal — deploy contracts and write addresses for the webapp:**
+
+```bash
+cd arena-race
+npm run deploy:localhost
+```
+
+**Important:** Run `deploy:localhost` only once per node session. If you run it again, the webapp gets new contract addresses; any match you created lives on the *old* escrow, so "Fetch match" will show "No match" and balances will look unchanged (you're reading the new USDC). To avoid this, keep the same deployment for the whole test, or restart the node and run deploy once, then create/enter/resolve again.
+
+**3. In a third terminal — start the result signer (needed to submit match results):**
+
+```bash
+cd arena-race
+npm run signer
+```
+
+**4. In a fourth terminal — start the webapp:**
+
+```bash
+cd arena-race/webapp
+npm run dev
+```
+
+**5. In your browser:** Open **http://localhost:5173**
+
+**6. Connect your wallet:** In MetaMask (or another wallet), add the network **Localhost 8545** (URL `http://127.0.0.1:8545`, chain id **31337**). Import one of the Hardhat node accounts (private keys are printed when you run `npm run node:localhost`).
+
+**Note:** Opening `http://127.0.0.1:8545/` in a browser returns a JSON-RPC "Parse error" — that is normal. The endpoint expects POST requests with JSON (used by MetaMask and the app). Use the webapp at **http://localhost:5173** to interact.
+
+**Flow to test:** Use **Create match** (owner = first Hardhat account), then **Enter match** with 4 different accounts (switch in MetaMask), then **Submit result** with placement e.g. `0,1,2,3` (1st = player 0, 2nd = player 1, …). The signer uses the same key as the deployer so results can be submitted from the UI.
+
+**Terminal (node) logs:** The Hardhat node often prints `Contract call: ...#<unrecognized-selector>` and `Transaction reverted without a reason`. These are from internal or ABI-unknown calls and do not mean your tx failed. Look for `eth_sendRawTransaction` with `submitEntry` or `submitResultWithPlacement` and `Gas used:` to confirm success.
+
+**MetaMask vs app balance:** On Localhost, MetaMask may not refresh custom token (USDC) balances. The balance shown on **http://localhost:5173** is read directly from the chain and is correct; switch accounts there to see each account’s USDC after payouts.
 
 ---
 
