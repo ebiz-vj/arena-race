@@ -41,14 +41,8 @@
 - **Rule:** TDD v1.1 is the single source of truth; no gameplay/economic changes without explicit change request.
 
 ### Step 2 — Create Implementation Backlog
-- **Deliverable:** `docs/Implementation_Backlog.md`
-- **Content:**
-  - **Track 1 — Smart Contract:** 14 tasks (1.1–1.14), contract → tests → testnet.
-  - **Track 2 — Match Engine Backend:** 9 tasks (2.1–2.9), pure engine + determinism.
-  - **Track 3 — Queue + Entry Flow:** 9 tasks (3.1–3.9), after contract testnet stable.
-  - **Track 4 — Infrastructure & DevOps:** 7 tasks (4.1–4.7).
-- **Dependencies:** Contract first; engine can run in parallel after backlog; entry/queue after contract stable.
-- **Owner placeholder:** ENGINE_AGENT for all tasks.
+- **Deliverable:** Task ordering is in [MVP_Execution_Plan.md](MVP_Execution_Plan.md) (4 tracks: Contract, Engine, Queue+Entry, Infra).
+- **Content:** Contract first; engine in parallel; entry/queue after contract testnet stable.
 
 ---
 
@@ -91,7 +85,7 @@
   - `arena-race/contracts/scripts/deploy-and-run-local.ts` — local 50 matches + expiration simulation.
   - `arena-race/contracts/scripts/run-testnet-matches.ts` — run N matches against deployed escrow (+ optional expiration).
   - `arena-race/contracts/scripts/expire-and-refund.ts` — call expireMatch after 5 min (live testnet).
-  - `docs/STEP5_Testnet_Deploy.md` — runbook (env, deploy, verify, 50 matches, expiration).
+  - `docs/DEPLOY_RUNBOOK.md` — runbook (env, deploy, verify, 50 matches, expiration).
   - `docs/ENV_SETUP.md` — where each env variable comes from (wallet vs RPC vs Etherscan).
   - `arena-race/.env.example` — template; `arena-race/.gitignore` — includes `.env`.
 - **Config:**
@@ -326,16 +320,17 @@ arena-race/
   .env.example
   .gitignore
 docs/
-  Implementation_Backlog.md
-  STEP5_Testnet_Deploy.md
-  ENV_SETUP.md
-  REPLAY_RUNBOOK.md
+  MVP_Execution_Plan.md
+  PROGRESS_NOTES.md   (this file)
+  ARENA_RACE_TECHNICAL_DESIGN.md
+  ARENA_RACE_ARCHITECTURE_SPEC.md
+  DEPLOY_RUNBOOK.md
+  PRE_MAINNET_CHECKLIST.md
   KEY_MANAGEMENT_RUNBOOK.md
   RED_TEAM_SCENARIOS.md
-  PRE_MAINNET_CHECKLIST.md
-  PROGRESS_NOTES.md   (this file)
-  MVP_Execution_Plan.md
-  ARENA_RACE_TECHNICAL_DESIGN.md
+  REPLAY_RUNBOOK.md
+arena-race/docs/
+  ENV_SETUP.md
 ```
 
 ---

@@ -95,15 +95,15 @@ arena-race/
 
 docs/
 ├── MVP_Execution_Plan.md      # Phased steps (spec → contract → engine → entry → launch)
+├── PROGRESS_NOTES.md           # What’s done; next steps
 ├── ARENA_RACE_TECHNICAL_DESIGN.md
-├── Implementation_Backlog.md
-├── PROGRESS_NOTES.md
+├── ARENA_RACE_ARCHITECTURE_SPEC.md  # Formulas, scoring, thresholds
+├── DEPLOY_RUNBOOK.md          # Sepolia deploy, verify, 50+ matches, expiration
 ├── PRE_MAINNET_CHECKLIST.md   # Gate before mainnet; run verify:checklist
-├── STEP5_Testnet_Deploy.md    # Deploy + verify on Sepolia
-├── ENV_SETUP.md               # (in arena-race/docs or docs) Env vars
-├── KEY_MANAGEMENT_RUNBOOK.md  # Result signer, multisig, rotation
+├── KEY_MANAGEMENT_RUNBOOK.md   # Result signer, multisig, rotation
 ├── RED_TEAM_SCENARIOS.md      # Attack scenarios and handling
 └── REPLAY_RUNBOOK.md          # Replay and dispute flow
+(Env vars: arena-race/docs/ENV_SETUP.md)
 ```
 
 ---
