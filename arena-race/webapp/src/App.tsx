@@ -11,6 +11,7 @@ const STATUS_NAMES: Record<number, string> = {
 };
 
 const SIGNER_URL = "http://localhost:3344";
+const GAME_SERVER_URL = "http://localhost:3000";
 
 // Contract custom error selectors (first 4 bytes of keccak256("ErrorName(...)"))
 const ESCROW_ERRORS: Record<string, string> = {
@@ -84,9 +85,24 @@ export default function App() {
   const [signerMatchesContract, setSignerMatchesContract] = useState<boolean | null>(null);
   const [connectLoading, setConnectLoading] = useState(false);
   const [fetchMatchLoading, setFetchMatchLoading] = useState(false);
+  const [queueTier, setQueueTier] = useState<"bronze-10" | "bronze-25">("bronze-10");
+  const [inQueue, setInQueue] = useState(false);
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [matchFound, setMatchFound] = useState<{ matchId: string; entry_deadline: number } | null>(null);
+  const [matchState, setMatchState] = useState<{
+    turnIndex: number;
+    tokenPositions: number[][][];
+    scores: { total: number }[];
+    turnDeadlineMs?: number;
+  } | null>(null);
+  const [playerIndex, setPlayerIndex] = useState<number | null>(null);
+  const [matchMove0, setMatchMove0] = useState("");
+  const [matchMove1, setMatchMove1] = useState("");
+  const [matchMove2, setMatchMove2] = useState("");
+  const [matchActionLoading, setMatchActionLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/deployed-local.json")
+    fetch(`/deployed-local.json?t=${Date.now()}`)
       .then((r) => r.ok ? r.json() : null)
       .then((d) => setDeployed(d))
       .catch(() => setDeployed(null));
@@ -225,6 +241,202 @@ export default function App() {
     return keccak256(getBytes(toBeHex(n)));
   };
 
+  const resolveMatchId = (id: string): string => {
+    const trimmed = (id || "").trim();
+    if (/^0x[0-9a-fA-F]{64}$/.test(trimmed)) return trimmed;
+    return matchIdToBytes32(id);
+  };
+
+  useEffect(() => {
+    if (matchFound) setMatchIdInput(matchFound.matchId);
+  }, [matchFound?.matchId]);
+
+  useEffect(() => {
+    if (!address || (!inQueue && !matchFound)) return;
+    const t = setInterval(async () => {
+      try {
+        const res = await fetch(`${GAME_SERVER_URL}/queue/status?wallet=${encodeURIComponent(address)}`);
+        const data = await res.json();
+        if (data.status === "match_found" && data.matchId) {
+          setMatchFound({ matchId: data.matchId, entry_deadline: data.entry_deadline });
+          setInQueue(false);
+        } else if (data.status === "idle") {
+          setMatchFound(null);
+        }
+      } catch {
+        // ignore
+      }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [address, inQueue, matchFound]);
+
+  const joinQueue = async () => {
+    if (!address) return;
+    setQueueLoading(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`${GAME_SERVER_URL}/queue/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: queueTier, wallet: address }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "match_found") {
+        setMatchFound({ matchId: data.matchId, entry_deadline: data.entry_deadline });
+        setInQueue(false);
+        setMsg({ type: "success", text: "Match found! Proceed to pay entry below." });
+      } else if (res.ok) {
+        setInQueue(true);
+        setMsg({ type: "success", text: "Joined queue. Waiting for 4 players…" });
+      } else {
+        setMsg({ type: "error", text: data.error || "Join failed" });
+      }
+    } catch (e) {
+      setMsg({ type: "error", text: (e as Error)?.message ?? "Game server unreachable. Start it with: npm run game-server" });
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const loadMatchState = async () => {
+    if (!address || !deployed || !matchIdInput.trim()) return;
+    const mid = resolveMatchId(matchIdInput);
+    try {
+      const [stateRes, escrow] = await Promise.all([
+        fetch(`${GAME_SERVER_URL}/match/state?matchId=${encodeURIComponent(mid)}`),
+        provider ? new Contract(deployed.escrow, ESCROW_ABI, provider).matches(mid) : null,
+      ]);
+      if (stateRes.ok) {
+        const data = await stateRes.json();
+        setMatchState({
+          turnIndex: data.turnIndex,
+          tokenPositions: data.tokenPositions,
+          scores: data.scores?.map((s: { total: number }) => ({ total: s.total })) ?? [],
+          turnDeadlineMs: data.turnDeadlineMs,
+        });
+      } else {
+        setMatchState(null);
+      }
+      const wallets = escrow && (Array.isArray(escrow.playerWallets) ? escrow.playerWallets : (escrow as unknown[])[4]);
+      if (Array.isArray(wallets)) {
+        const idx = wallets.findIndex((w: string) => String(w).toLowerCase() === address.toLowerCase());
+        setPlayerIndex(idx >= 0 ? idx : null);
+      } else {
+        setPlayerIndex(null);
+      }
+    } catch {
+      setMatchState(null);
+      setPlayerIndex(null);
+    }
+  };
+
+  const startMatchThenLoad = async () => {
+    if (!address || !deployed || !matchIdInput.trim()) return;
+    const mid = resolveMatchId(matchIdInput);
+    setMatchActionLoading(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`${GAME_SERVER_URL}/match/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchId: mid }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const reason = data.reason ? ` (${data.reason})` : "";
+        let text = data.error ?? `Start failed (${res.status})`;
+        if (data.reason === "pending_entries") {
+          text += ". Ensure the game server .env has ESCROW_ADDRESS set to the same escrow as this page: " + (deployed?.escrow?.slice(0, 10) + "…") + ".";
+        } else {
+          text += reason;
+        }
+        setMsg({ type: "error", text });
+        setMatchActionLoading(false);
+        return;
+      }
+      await loadMatchState();
+    } catch (e) {
+      setMsg({ type: "error", text: (e as Error)?.message ?? "Start failed (game server unreachable?)" });
+    } finally {
+      setMatchActionLoading(false);
+    }
+  };
+
+  const submitMatchAction = async () => {
+    if (!matchIdInput.trim() || typeof playerIndex !== "number" || matchState == null) return;
+    const mid = resolveMatchId(matchIdInput);
+    const m0 = parseInt(matchMove0.trim(), 10);
+    const m1 = parseInt(matchMove1.trim(), 10);
+    const m2 = parseInt(matchMove2.trim(), 10);
+    if ([m0, m1, m2].some((n) => isNaN(n) || n < 0 || n > 48)) {
+      setMsg({ type: "error", text: "Moves must be tile indices 0–48" });
+      return;
+    }
+    setMatchActionLoading(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`${GAME_SERVER_URL}/match/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchId: mid, turnIndex: matchState.turnIndex, playerIndex, moves: [m0, m1, m2] }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMsg({ type: "success", text: "Move submitted." });
+        await loadMatchState();
+      } else {
+        setMsg({ type: "error", text: data.error ?? "Submit failed" });
+      }
+    } catch (e) {
+      setMsg({ type: "error", text: (e as Error)?.message ?? "Submit failed" });
+    } finally {
+      setMatchActionLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!matchState || !matchIdInput.trim()) return;
+    const t = setInterval(loadMatchState, 1500);
+    return () => clearInterval(t);
+  }, [matchState != null, matchIdInput]);
+
+  const leaveQueue = async () => {
+    if (!address) return;
+    setQueueLoading(true);
+    try {
+      await fetch(`${GAME_SERVER_URL}/queue/leave`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: queueTier, wallet: address }),
+      });
+      setInQueue(false);
+      setMatchFound(null);
+      setMsg(null);
+    } catch {
+      // ignore
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const createMatchWithId = async (matchIdHex: string) => {
+    if (!provider || !address || !deployed) return;
+    setMsg(null);
+    setTxPending(true);
+    try {
+      const signer = await provider.getSigner();
+      const escrow = new Contract(deployed.escrow, ESCROW_ABI, signer);
+      const tx = await escrow.createMatch(matchIdHex, deployed.entryAmount);
+      const receipt = await tx.wait();
+      const hash = receipt?.hash ?? tx.hash;
+      setMsg({ type: "success", text: hash ? `Match created on-chain. Tx: ${String(hash).slice(0, 18)}…` : "Match created." });
+    } catch (e) {
+      setMsg({ type: "error", text: decodeRevertReason(e) });
+    } finally {
+      setTxPending(false);
+    }
+  };
+
   const createMatch = async () => {
     if (!provider || !address || !deployed) return;
     setMsg(null);
@@ -252,7 +464,7 @@ export default function App() {
       const signer = await provider.getSigner();
       const usdc = new Contract(deployed.usdc, ERC20_ABI, signer);
       const escrow = new Contract(deployed.escrow, ESCROW_ABI, signer);
-      const mid = matchIdToBytes32(matchIdInput);
+      const mid = resolveMatchId(matchIdInput);
       const amount = BigInt(deployed.entryAmount);
       const txApprove = await usdc.approve(deployed.escrow, amount);
       await txApprove.wait();
@@ -275,7 +487,7 @@ export default function App() {
     setFetchMatchLoading(true);
     try {
       const escrow = new Contract(deployed.escrow, ESCROW_ABI, provider);
-      const mid = matchIdToBytes32(matchIdInput);
+      const mid = resolveMatchId(matchIdInput);
       const m = await escrow.matches(mid);
       if (m.entryDeadline === 0n || (typeof m.entryDeadline === "number" && m.entryDeadline === 0)) {
         setMatchInfo("No match at this seed. Create a match first or ensure you're on Localhost 8545 and haven't run deploy:localhost again.");
@@ -302,7 +514,7 @@ export default function App() {
     setMsg(null);
     setTxPending(true);
     try {
-      const mid = matchIdToBytes32(matchIdInput);
+      const mid = resolveMatchId(matchIdInput);
       const placement = placementInput.split(",").map((s) => parseInt(s.trim(), 10)) as [number, number, number, number];
       if (placement.length !== 4 || placement.some((p) => p < 0 || p > 3)) {
         throw new Error("Placement must be four numbers 0–3 (e.g. 0,1,2,3)");
@@ -383,14 +595,36 @@ export default function App() {
       {deployed && escrowHasCode === false && (
         <div className="card" style={{ borderColor: "#f87171", background: "rgba(248,113,113,0.1)" }}>
           <h2>No contract at escrow address</h2>
-          <p>This usually means the node was restarted. With the node running, run <code>npm run deploy:localhost</code> in <code>arena-race</code>, then refresh this page.</p>
+          {chainId != null && chainId !== 31337 ? (
+            <p><strong>Wrong network.</strong> This app uses Localhost. In MetaMask, switch to <strong>Localhost 8545</strong> (RPC URL <code>http://127.0.0.1:8545</code>, chain id <strong>31337</strong>). Then refresh this page.</p>
+          ) : (
+            <p>With the Hardhat node running, run <code>npm run deploy:localhost</code> in <code>arena-race</code>, then refresh this page.</p>
+          )}
         </div>
       )}
 
       {deployed && address && (
         <>
           <div className="card">
-            <h2>Match ID (numeric seed)</h2>
+            <h2>Queue (find a match)</h2>
+            <p><strong>Each of the 4 players</strong> must click Join queue (same tier, e.g. Bronze-10). When the 4th joins, the server forms a match and everyone sees &quot;Match found&quot;. Then owner creates the match on-chain and all 4 enter. <strong>Order:</strong> Queue → Match found → Create on-chain + Enter ×4 → Start match below → Live match.</p>
+            <select value={queueTier} onChange={(e) => setQueueTier(e.target.value as "bronze-10" | "bronze-25")}>
+              <option value="bronze-10">Bronze-10 (10 USDC)</option>
+              <option value="bronze-25">Bronze-25 (25 USDC)</option>
+            </select>
+            <button onClick={joinQueue} disabled={queueLoading || inQueue}>{queueLoading ? "…" : inQueue ? "In queue…" : "Join queue"}</button>
+            {inQueue && <button type="button" onClick={leaveQueue} disabled={queueLoading}>Leave queue</button>}
+            {matchFound && (
+              <>
+                <p className="status status-ok">Match found! Entry deadline: {new Date(matchFound.entry_deadline * 1000).toLocaleTimeString()}.</p>
+                <p style={{ fontSize: "0.9rem", color: "#94a3b8" }}>Owner: create this match on-chain first. Then all 4 players use Enter match below.</p>
+                <button type="button" onClick={() => createMatchWithId(matchFound!.matchId)} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Create this match on-chain (owner)"}</button>
+              </>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>Match ID (numeric seed or 0x… from queue)</h2>
             <label>Seed</label>
             <input value={matchIdInput} onChange={(e) => setMatchIdInput(e.target.value)} placeholder="1" />
             <button onClick={fetchMatch} disabled={fetchMatchLoading}>
@@ -410,6 +644,58 @@ export default function App() {
             <p>Approve USDC and submit entry for the <strong>current</strong> account (the one shown in Wallet above).</p>
             <p style={{ marginTop: "0.5rem", color: "#94a3b8" }}>Adding another player? Switch to that account in MetaMask — the address above should update — then click Enter match.</p>
             <button onClick={enterMatch} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Enter match"}</button>
+          </div>
+
+          <div className="card">
+            <h2>Live match (board and moves)</h2>
+            <p>For a match that is already Escrowed (4/4 entries): put its <strong>Match ID</strong> above (seed number or 0x… from queue), then click <strong>Start match / Refresh state</strong>. The game server will start the turn loop and the board will appear. Submit moves each turn (tile 0–48 for your 3 tokens). Ensure the game server is running and <code>ESCROW_ADDRESS</code> is set in its .env.</p>
+            <button type="button" onClick={startMatchThenLoad} disabled={matchActionLoading}>{matchActionLoading ? "…" : "Start match / Refresh state"}</button>
+            {matchState && (
+              <>
+                <p>Turn {matchState.turnIndex} — {matchState.turnDeadlineMs != null ? `deadline in ${Math.max(0, Math.ceil((matchState.turnDeadlineMs - Date.now()) / 1000))}s` : ""}</p>
+                <p>Scores: P0={matchState.scores[0]?.total ?? 0} P1={matchState.scores[1]?.total ?? 0} P2={matchState.scores[2]?.total ?? 0} P3={matchState.scores[3]?.total ?? 0}</p>
+                <div style={{ display: "inline-block", border: "1px solid #334155", marginBottom: "0.5rem" }}>
+                  {[0, 1, 2, 3, 4, 5, 6].map((row) => (
+                    <div key={row} style={{ display: "flex" }}>
+                      {[0, 1, 2, 3, 4, 5, 6].map((col) => {
+                        const tile = row * 7 + col;
+                        const tokens: string[] = [];
+                        matchState.tokenPositions?.forEach((positions, p) =>
+                          positions?.forEach((pos, t) => { if (pos === tile) tokens.push(`P${p}T${t}`); })
+                        );
+                        return (
+                          <div
+                            key={col}
+                            style={{
+                              width: 32,
+                              height: 32,
+                              border: "1px solid #475569",
+                              background: "#1e293b",
+                              fontSize: 9,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            title={`Tile ${tile} ${tokens.join(" ")}`}
+                          >
+                            {tokens.slice(0, 2).join(" ") || ""}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+                {playerIndex != null && (
+                  <>
+                    <label>Your moves (tile 0–48 for token 0, 1, 2)</label>
+                    <input value={matchMove0} onChange={(e) => setMatchMove0(e.target.value)} placeholder="0" style={{ width: 48 }} />
+                    <input value={matchMove1} onChange={(e) => setMatchMove1(e.target.value)} placeholder="1" style={{ width: 48 }} />
+                    <input value={matchMove2} onChange={(e) => setMatchMove2(e.target.value)} placeholder="2" style={{ width: 48 }} />
+                    <button type="button" onClick={submitMatchAction} disabled={matchActionLoading}>{matchActionLoading ? "…" : "Submit move"}</button>
+                  </>
+                )}
+              </>
+            )}
           </div>
 
           <div className="card">

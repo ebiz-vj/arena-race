@@ -1,0 +1,9 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.WIN_RATE_MIN_FIRST_RATE = exports.WIN_RATE_ROLLING_MATCHES = exports.WIN_RATE_MIN_MATCHES = exports.CO_OCCURRENCE_MAX_AVG_MIN_PLACE = exports.CO_OCCURRENCE_MIN_TOGETHER = exports.CO_OCCURRENCE_ROLLING_MATCHES = void 0;
+exports.CO_OCCURRENCE_ROLLING_MATCHES = 200;
+exports.CO_OCCURRENCE_MIN_TOGETHER = 15;
+exports.CO_OCCURRENCE_MAX_AVG_MIN_PLACE = 2.2;
+exports.WIN_RATE_MIN_MATCHES = 20;
+exports.WIN_RATE_ROLLING_MATCHES = 50;
+exports.WIN_RATE_MIN_FIRST_RATE = 0.8;

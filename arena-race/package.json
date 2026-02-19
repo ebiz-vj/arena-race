@@ -13,6 +13,7 @@
     "node:localhost": "hardhat node",
     "deploy:localhost": "hardhat run contracts/scripts/deploy-localhost.ts --network localhost",
     "signer": "node scripts/signer-server.js",
+    "game-server": "npm run dev --prefix game-server",
     "verify:localhost": "node scripts/verify-localhost-escrow.js"
   },
   "devDependencies": {

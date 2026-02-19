@@ -12,6 +12,8 @@ A deterministic, dispute-proof, escrow-safe Web3 skill league. This repo contain
 |------|----------|---------|
 | **Contracts** | `arena-race/contracts/` | Solidity escrow (USDC entry, 8% fee, 38/30/20/12 payout); tests in `contracts/test/`. |
 | **Backend** | `arena-race/backend/` | Pure match engine (resolveTurn), entry flow, queue, bronze retention, flags, replay; all logic testable without DB/blockchain. |
+| **Game server** | `arena-race/game-server/` | Authoritative HTTP API: queue (join/leave/status), match (start, action, state, entry-status, replay). SQLite persistence; turn loop 6 s/turn, 5 min max. |
+| **Webapp** | `arena-race/webapp/` | Queue UI, match board, wallet connect, create/enter match, submit result. |
 | **Scripts** | `arena-race/contracts/scripts/`, `arena-race/scripts/` | Deploy, run testnet matches, expiration/refund, pre-mainnet verification. |
 | **Docs** | `docs/` | Execution plan, technical design, runbooks, checklist, progress notes. |
 
@@ -36,6 +38,15 @@ npm install
 
 # Backend (engine, entry, queue, tests)
 cd backend
+npm install
+npm run build
+
+# Game server (queue, match API, turn loop)
+cd ../game-server
+npm install
+
+# Webapp
+cd ../webapp
 npm install
 ```
 
@@ -87,6 +98,10 @@ arena-race/
 │   ├── replay/     # Replay from match_turns; tamper detection
 │   ├── simulation/ # 1,000-match run with random legal actions
 │   └── stress/     # Concurrency stress (4/8 parallel matches)
+├── game-server/    # Authoritative API: queue, match start/action/state, replay
+│   ├── src/        # Express app, db (SQLite), escrow, turnLoop, routes
+│   └── .env.example
+├── webapp/         # React + Vite: queue UI, match board, wallet, create/enter/resolve
 ├── scripts/
 │   └── verify-pre-mainnet.js  # Runs contract tests + backend replay/sim + 100 matches
 ├── hardhat.config.ts
@@ -146,6 +161,7 @@ docs/
 | `npm run deploy:local` | Deploy on Hardhat + run 100 matches + expiration. |
 | `npm run verify:checklist` | Full pre-mainnet verification (contract + backend + 100 matches). |
 | `npm run deploy:localhost` | Deploy to a running Hardhat node (localhost:8545); writes addresses for the webapp. |
+| `npm run game-server` | Start the game server (queue, match API, turn loop) on http://localhost:3000. |
 | `npx hardhat run contracts/scripts/e2e-localhost-flow.ts` | E2E: create match, 4 entries, submit result, verify status and payouts (no UI). |
 
 **Backend (from `arena-race/backend/`):**
@@ -160,7 +176,7 @@ docs/
 
 ## Test on localhost (game platform UI)
 
-Run the chain, deploy contracts, and open the web UI to create matches, enter, and resolve.
+Run the chain, deploy contracts, game server, signer, and webapp to play the full game (queue → match → enter → play → result).
 
 **1. Start the local chain (leave this terminal open):**
 
@@ -187,22 +203,31 @@ cd arena-race
 npm run signer
 ```
 
-**4. In a fourth terminal — start the webapp:**
+**4. In a fourth terminal — start the game server:**
+
+```bash
+cd arena-race
+npm run game-server
+```
+
+Optional: copy `arena-race/game-server/.env.example` to `arena-race/game-server/.env` and set `ESCROW_ADDRESS` to the deployed escrow; set `SUBMITTER_PRIVATE_KEY` for auto result submission. Defaults: port 3000, RPC http://127.0.0.1:8545, signer http://127.0.0.1:3344.
+
+**5. In a fifth terminal — start the webapp:**
 
 ```bash
 cd arena-race/webapp
 npm run dev
 ```
 
-**5. In your browser:** Open **http://localhost:5173**
+**6. In your browser:** Open **http://localhost:5173**
 
-**6. Connect your wallet:** In MetaMask (or another wallet), add the network **Localhost 8545** (URL `http://127.0.0.1:8545`, chain id **31337**). Import one of the Hardhat node accounts (private keys are printed when you run `npm run node:localhost`).
+**7. Connect your wallet:** In MetaMask (or another wallet), add the network **Localhost 8545** (URL `http://127.0.0.1:8545`, chain id **31337**). Import one of the Hardhat node accounts (private keys are printed when you run `npm run node:localhost`).
 
 **Note:** Opening `http://127.0.0.1:8545/` in a browser returns a JSON-RPC "Parse error" — that is normal. The endpoint expects POST requests with JSON (used by MetaMask and the app). Use the webapp at **http://localhost:5173** to interact.
 
-**Flow to test:** Use **Create match** (owner = first Hardhat account), then **Enter match** with 4 different accounts (switch in MetaMask), then **Submit result** with placement e.g. `0,1,2,3` (1st = player 0, 2nd = player 1, …). The signer uses the same key as the deployer so results can be submitted from the UI.
+**Full game flow:** Select tier, **Join queue**. When 4 players are in the same tier you get **Match found**. Owner clicks **Create this match on-chain (owner)**; all 4 click **Enter match**. After 4 entries, click **Start match / Refresh state** for the 7×7 board; each turn enter 3 tile indices (0–48) and **Submit move**. Legacy: **Create match** (seed), **Enter match**, **Submit result**.
 
-**Terminal (node) logs:** The Hardhat node often prints `Contract call: ...#<unrecognized-selector>` and `Transaction reverted without a reason`. These are from internal or ABI-unknown calls and do not mean your tx failed. Look for `eth_sendRawTransaction` with `submitEntry` or `submitResultWithPlacement` and `Gas used:` to confirm success.
+**Note:** The balance on the webapp is read from the chain; switch accounts to see USDC after payouts. The Hardhat node often prints `Contract call: ...#<unrecognized-selector>` and `Transaction reverted without a reason`. These are from internal or ABI-unknown calls and do not mean your tx failed. Look for `eth_sendRawTransaction` with `submitEntry` or `submitResultWithPlacement` and `Gas used:` to confirm success.
 
 **MetaMask vs app balance:** On Localhost, MetaMask may not refresh custom token (USDC) balances. The balance shown on **http://localhost:5173** is read directly from the chain and is correct; switch accounts there to see each account’s USDC after payouts.
 

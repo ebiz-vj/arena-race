@@ -9,6 +9,6 @@
     "rootDir": ".",
     "moduleResolution": "node"
   },
-  "include": ["engine/**/*.ts", "entry/**/*.ts", "queue/**/*.ts", "bronze/**/*.ts", "flags/**/*.ts", "replay/**/*.ts", "simulation/**/*.ts", "stress/**/*.ts"],
+  "include": ["index.ts", "engine/**/*.ts", "entry/**/*.ts", "queue/**/*.ts", "bronze/**/*.ts", "flags/**/*.ts", "replay/**/*.ts", "simulation/**/*.ts", "stress/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
