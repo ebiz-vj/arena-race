@@ -1,7 +1,7 @@
 # Arena Race MVP — Progress Notes
 
 **Purpose:** Record of what has been achieved so far, aligned with the Execution Plan v1.0 and TDD v1.1 (LOCKED).  
-**Updated:** As of completion of Phase 2 through Step 5 (testnet deploy).
+**Updated:** As of completion of Phase 3 through Step 7 (engine + determinism).
 
 ---
 
@@ -14,9 +14,11 @@
 | 2 | 3 — Implement Escrow Contract | ✅ Complete | ArenaRaceEscrow.sol per TDD §3. |
 | 2 | 4 — Unit Test Contract | ✅ Complete | 23 tests, ≥95% coverage. |
 | 2 | 5 — Deploy to Testnet | ✅ Complete | Sepolia deploy + runbook; 50-match sim available. |
-| 3+ | 6 onward | ⏳ Not started | Backend engine, entry flow, queue, etc. |
+| 3 | 6 — resolveTurn() (pure engine) | ✅ Complete | movement, trap, zone, overtake, survival, scoring, tie-break. |
+| 3 | 7 — Determinism & replay test | ✅ Complete | 1,000× identical output; replay reproduces result. |
+| 4+ | 8 onward | ⏳ Not started | Entry flow, queue, turn timer, etc. |
 
-**Critical path:** Spec freeze → Contract → Tests → Testnet deploy ✅ **done.** Next: Backend engine (Step 6) and/or Entry flow (Step 8) after contract stable.
+**Critical path:** Spec freeze → Contract → Tests → Testnet deploy ✅ **done.** Engine ✅ **done.** Next: Step 8 — Connect backend to contract (entry flow).
 
 ---
 
@@ -92,6 +94,30 @@
 
 ---
 
+## Phase 3 — Backend Match Engine (Pure Logic)
+
+### Step 6 — Implement resolveTurn() (Pure Engine Only)
+- **Deliverables:** `arena-race/backend/engine/` — pure TypeScript; no DB, no blockchain.
+- **Implemented (TDD §4.4, §5–6):**
+  - **types.ts:** MatchState, PlayerAction, TokenPositions, BoardConfig, createInitialState, defaultAction.
+  - **movement.ts:** applyMovement in fixed player order (0,1,2,3); first mover wins tile.
+  - **trap.ts:** resolveTraps — tokens on trap tiles eliminated (position = -1).
+  - **zone.ts:** contested-only (zone = row); 2 pts per contested zone per player per turn.
+  - **overtake.ts:** tileIndex = row*7+col; overtake condition; cap 8 per player per match; 4 pts per overtake.
+  - **survival.ts:** safe tokens × 0.5; match cap 75 applied at ranking.
+  - **scoring.ts:** position 0.13×(6−row), zone/overtake/survival accumulation; applySurvivalCapAndTotal; computePlacement with tie-break (total → overtake+zone → overtake count).
+  - **resolveTurn.ts:** movement → trap → zone → overtake → survival → score update; returns new state.
+- **Unit tests:** movement.test.ts, trap.test.ts, zone.test.ts, overtake.test.ts, survival.test.ts, scoring.test.ts, resolveTurn.test.ts.
+
+### Step 7 — Determinism and Replay Test
+- **Deliverable:** `arena-race/backend/engine/determinism.test.ts`
+- **Tests:**
+  - 1,000 identical (state + actions) runs → identical output (turnIndex, tokenPositions, scores, overtakeCounts).
+  - Replay full match from stored action log → same final score and placement.
+- **Run:** From `arena-race/backend`: `npm install` then `npm test`. (If disk space error, free space and retry.)
+
+---
+
 ## Supporting Work (Environment & Ops)
 
 - **Env variables:**
@@ -110,6 +136,27 @@
 
 ```
 arena-race/
+  backend/
+    engine/
+      types.ts
+      movement.ts
+      trap.ts
+      zone.ts
+      overtake.ts
+      survival.ts
+      scoring.ts
+      resolveTurn.ts
+      movement.test.ts
+      trap.test.ts
+      zone.test.ts
+      overtake.test.ts
+      survival.test.ts
+      scoring.test.ts
+      resolveTurn.test.ts
+      determinism.test.ts
+    package.json
+    jest.config.js
+    tsconfig.json
   contracts/
     ArenaRaceEscrow.sol
     MockERC20.sol
@@ -137,10 +184,9 @@ docs/
 
 ## Next Steps (Execution Plan)
 
-- **Step 6 — Implement resolveTurn() (pure engine):** No DB/blockchain; `newState = resolveTurn(previousState, playerActions[])`; movement, trap, zone, overtake, survival, scoring, tie-break per TDD §5–6.
-- **Step 7 — Determinism and replay test:** 1,000 identical runs → identical output; replay from action log.
-- **Step 8 — Connect backend to contract:** Entry flow; start match only when contract status = Escrowed; handle expiration/refund.
-- **Optional before Step 8:** Verify ArenaRaceEscrow on Sepolia Etherscan; run 50+ testnet matches (or rely on `deploy:local` simulation); run one live expiration test on Sepolia.
+- **Step 8 — Connect backend to contract:** Entry flow; start match only when contract status = Escrowed; handle expiration/refund. Test: 4 players pay → Escrowed → match starts; 1 never pays → expire → refund; entry deadline 5 min.
+- **Step 9 — Implement queue logic:** Redis Bronze-10/Bronze-25; FIFO pop 4 → create match; 180 s merge, 240 s timeout; entry deadline aligned with contract.
+- **Step 10 — Turn timer:** 6 s window; accept action only if receivedAt ≤ turnDeadline; default no-op; disconnect handling.
 
 ---
 
