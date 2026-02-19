@@ -1,0 +1,23 @@
+{
+  "name": "arena-race-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "coverage": "hardhat coverage",
+    "deploy:sepolia": "hardhat run contracts/scripts/deploy.ts --network sepolia",
+    "deploy:local": "hardhat run contracts/scripts/deploy-and-run-local.ts",
+    "simulate:local": "hardhat run contracts/scripts/deploy-and-run-local.ts"
+  },
+  "devDependencies": {
+    "dotenv": "^16.3.1",
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.0.2",
+    "hardhat": "^2.19.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2"
+  }
+}
