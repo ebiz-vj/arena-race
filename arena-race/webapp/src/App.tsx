@@ -14,13 +14,22 @@ const SIGNER_URL = "http://localhost:3344";
 
 // Contract custom error selectors (first 4 bytes of keccak256("ErrorName(...)"))
 const ESCROW_ERRORS: Record<string, string> = {
-  "0xfc2bc70d": "Match already exists. Do NOT click Create match again. To add another player: switch account in MetaMask (address above should change), then click Enter match below.",
-  "0x118cdaa7": "Only the contract owner can create matches. With this account, use Enter match to join a match (do not use Create match).",
-  "0x3c3544ed": "Invalid match id (zero).",
-  "0x2c5211c6": "Invalid amount (e.g. zero).",
+  "0xfc2bc70d": "Match already exists. Do NOT click Create match again. Switch account in MetaMask and use Enter match for more players.",
+  "0x118cdaa7": "Only the contract owner can create matches. With this account use Enter match instead.",
+  "0x3c3544ed": "Invalid match id (zero). Use a positive seed (e.g. 1).",
+  "0x2c5211c6": "Invalid amount (e.g. zero). Entry is 10 USDC per player.",
   "0x83b9f0c6": "Not the contract owner.",
   "0x2d5a3b7a": "Contract is paused.",
-  "0x8baa579f": "Invalid signature. Start the signer (npm run signer in arena-race) and ensure it uses the deployer key (first Hardhat account). Then try Submit result again.",
+  "0x8baa579f": "Invalid signature. Run the signer (npm run signer) and ensure it uses the deployer key (first Hardhat account).",
+  "0x78636683": "This account has already entered this match. Use another account to fill the remaining slots.",
+  "0xc8b89ef0": "Match is not accepting entries (e.g. already Escrowed or Expired). Check match status with Fetch match.",
+  "0x81efbd8d": "Entry window has closed. Create a new match or use an existing one that is still PendingEntries.",
+  "0xd0404f85": "Match has not expired yet. Wait until after the entry deadline to expire or claim refund.",
+  "0xff272902": "Match is not Escrowed (e.g. still PendingEntries or already Resolved). Only Escrowed matches can have results submitted.",
+  "0xa85e6f1a": "Refund already claimed for this match by this account.",
+  "0x67b4a24c": "Payout amounts do not sum to the pool. Use placement 0,1,2,3 for standard 38/30/20/12.",
+  "0xb19089b8": "No match exists for this id. Create a match first or check the seed.",
+  "0xd92e233d": "Invalid zero address in contract config.",
 };
 
 function decodeRevertReason(e: unknown): string {
@@ -34,18 +43,28 @@ function decodeRevertReason(e: unknown): string {
     const friendly = ESCROW_ERRORS[selector];
     if (friendly) return friendly;
   }
+  // User rejected in wallet
+  if (err?.code === "ACTION_REJECTED" || err?.code === 4001) return "Transaction was rejected in your wallet.";
+  const errMsg = [err?.message, err?.reason, (err as { error?: { message?: string } })?.error?.message].filter(Boolean).join(" ");
+  if (errMsg.toLowerCase().includes("user rejected") || errMsg.toLowerCase().includes("user denied")) return "Transaction was rejected in your wallet.";
   // No contract at address (RPC returns 0x -> ethers throws BAD_DATA)
   if (err?.code === "BAD_DATA" && (err?.value === "0x" || (err?.message && err.message.includes("could not decode result data")))) {
-    return "No contract at this escrow address. The node was likely restarted — run deploy:localhost once (with the node running), then refresh this page.";
+    return "No contract at this escrow address. Run deploy:localhost once (with the node running), then refresh this page.";
   }
-  // JSON-RPC parse error: node returned empty/invalid response (e.g. node restarted or overloaded)
-  const errMsg = [err?.message, err?.reason, (err as { error?: { message?: string } })?.error?.message].filter(Boolean).join(" ");
+  // JSON-RPC parse error
   if (errMsg.includes("Parse error") || errMsg.includes("Unexpected end of JSON input") || errMsg.includes("JSON input")) {
-    return "RPC returned an invalid response. Make sure the Hardhat node is running (npm run node:localhost) and try again. If the node restarted, run deploy:localhost then refresh.";
+    return "RPC returned an invalid response. Ensure the Hardhat node is running (npm run node:localhost) and try again.";
   }
+  // Network / timeout
+  if (err?.code === "NETWORK_ERROR" || errMsg.includes("ECONNREFUSED") || errMsg.includes("timeout") || errMsg.includes("TIMEOUT")) {
+    return "Network error. Check that the Hardhat node is running and that MetaMask is on Localhost 8545.";
+  }
+  // ERC20: insufficient balance or allowance
+  if (errMsg.includes("insufficient balance") || errMsg.includes("ERC20: transfer amount exceeds balance")) return "Insufficient USDC balance. You need at least 10 USDC to enter.";
+  if (errMsg.includes("allowance") || errMsg.includes("ERC20: insufficient allowance")) return "Allowance too low. The Enter match flow will request approval — try again and confirm both approval and entry.";
   const msg = err?.reason ?? err?.message;
   if (msg && typeof msg === "string") return msg;
-  return "Transaction failed";
+  return "Transaction failed.";
 }
 
 type Deployed = { chainId: number; usdc: string; escrow: string; entryAmount: string };
@@ -63,6 +82,8 @@ export default function App() {
   const [chainId, setChainId] = useState<number | null>(null);
   const [escrowHasCode, setEscrowHasCode] = useState<boolean | null>(null);
   const [signerMatchesContract, setSignerMatchesContract] = useState<boolean | null>(null);
+  const [connectLoading, setConnectLoading] = useState(false);
+  const [fetchMatchLoading, setFetchMatchLoading] = useState(false);
 
   useEffect(() => {
     fetch("/deployed-local.json")
@@ -97,10 +118,14 @@ export default function App() {
     setMsg(null);
   }, [address]);
 
-  useEffect(() => {
+  const refreshUsdcBalance = () => {
     if (!provider || !address || !deployed) return;
     const usdc = new Contract(deployed.usdc, ERC20_ABI, provider);
     usdc.balanceOf(address).then((b: bigint) => setUsdcBalance(formatUnits(b, 6))).catch(() => setUsdcBalance("—"));
+  };
+
+  useEffect(() => {
+    refreshUsdcBalance();
   }, [provider, address, deployed]);
 
   useEffect(() => {
@@ -140,10 +165,11 @@ export default function App() {
       });
       return;
     }
+    setConnectLoading(true);
     try {
       const p = new BrowserProvider(ethereum);
       const accounts = await p.send("eth_requestAccounts", []);
-      if (!accounts?.length) throw new Error("No account");
+      if (!accounts?.length) throw new Error("No account selected.");
       setAddress(accounts[0]);
       setProvider(p);
       const net = await p.getNetwork();
@@ -154,6 +180,8 @@ export default function App() {
       }
     } catch (e) {
       setMsg({ type: "error", text: decodeRevertReason(e) });
+    } finally {
+      setConnectLoading(false);
     }
   };
 
@@ -190,7 +218,10 @@ export default function App() {
   };
 
   const matchIdToBytes32 = (id: string): string => {
-    const n = BigInt(id || "0");
+    const trimmed = (id || "0").trim();
+    if (trimmed === "" || !/^\d+$/.test(trimmed)) throw new Error("Invalid seed. Use a positive number (e.g. 1).");
+    const n = BigInt(trimmed);
+    if (n < 0n) throw new Error("Invalid seed. Use a positive number.");
     return keccak256(getBytes(toBeHex(n)));
   };
 
@@ -203,8 +234,9 @@ export default function App() {
       const escrow = new Contract(deployed.escrow, ESCROW_ABI, signer);
       const mid = matchIdToBytes32(matchIdInput);
       const tx = await escrow.createMatch(mid, deployed.entryAmount);
-      await tx.wait();
-      setMsg({ type: "success", text: `Match created. ID (bytes32): ${mid.slice(0, 18)}...` });
+      const receipt = await tx.wait();
+      const hash = receipt?.hash ?? tx.hash;
+      setMsg({ type: "success", text: hash ? `Match created. Tx: ${String(hash).slice(0, 18)}…` : "Match created." });
     } catch (e) {
       setMsg({ type: "error", text: decodeRevertReason(e) });
     } finally {
@@ -225,8 +257,10 @@ export default function App() {
       const txApprove = await usdc.approve(deployed.escrow, amount);
       await txApprove.wait();
       const txEntry = await escrow.submitEntry(mid, amount);
-      await txEntry.wait();
-      setMsg({ type: "success", text: "Entry submitted." });
+      const receipt = await txEntry.wait();
+      const hash = receipt?.hash ?? txEntry.hash;
+      setMsg({ type: "success", text: hash ? `Entry submitted. Tx: ${String(hash).slice(0, 18)}…` : "Entry submitted." });
+      refreshUsdcBalance();
     } catch (e) {
       setMsg({ type: "error", text: decodeRevertReason(e) });
     } finally {
@@ -238,12 +272,13 @@ export default function App() {
     if (!provider || !deployed) return;
     setMsg(null);
     setMatchInfo("");
+    setFetchMatchLoading(true);
     try {
       const escrow = new Contract(deployed.escrow, ESCROW_ABI, provider);
       const mid = matchIdToBytes32(matchIdInput);
       const m = await escrow.matches(mid);
       if (m.entryDeadline === 0n || (typeof m.entryDeadline === "number" && m.entryDeadline === 0)) {
-        setMatchInfo("No match at this seed on this contract. Create a match first, or ensure you're on Localhost 8545 and have not run deploy:localhost again (that overwrites addresses and the new contracts have no matches).");
+        setMatchInfo("No match at this seed. Create a match first or ensure you're on Localhost 8545 and haven't run deploy:localhost again.");
         return;
       }
       const status = STATUS_NAMES[Number(m.status)] ?? "?";
@@ -254,11 +289,11 @@ export default function App() {
       const err = e as Error & { code?: string; value?: string; reason?: string };
       const friendly = err.code === "BAD_DATA" && (err.value === "0x" || (err.message && String(err.message).includes("could not decode result data")))
         ? "No contract at this escrow address. Run deploy:localhost once (with the node running), then refresh this page."
-        : (err.reason ?? err.message ?? String(e));
-      const hint = chainId !== deployed.chainId
-        ? " Switch MetaMask to Localhost 8545 (chain id 31337)."
-        : "";
+        : decodeRevertReason(e);
+      const hint = chainId !== deployed.chainId ? " Switch MetaMask to Localhost 8545 (31337)." : "";
       setMatchInfo(`${friendly}${hint}`);
+    } finally {
+      setFetchMatchLoading(false);
     }
   };
 
@@ -272,18 +307,25 @@ export default function App() {
       if (placement.length !== 4 || placement.some((p) => p < 0 || p > 3)) {
         throw new Error("Placement must be four numbers 0–3 (e.g. 0,1,2,3)");
       }
-      const res = await fetch(SIGNER_URL + "/sign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchId: mid, placement }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.signature) throw new Error(data.error || "Signer failed");
+      let res: Response;
+      try {
+        res = await fetch(SIGNER_URL + "/sign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ matchId: mid, placement }),
+        });
+      } catch (fetchErr) {
+        throw new Error("Signer unreachable. Is the signer running? Run: cd arena-race && npm run signer");
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.signature) throw new Error(data.error || "Signer failed or returned no signature.");
       const signer = await provider.getSigner();
       const escrow = new Contract(deployed.escrow, ESCROW_ABI, signer);
       const tx = await escrow.submitResultWithPlacement(mid, placement, data.signature);
-      await tx.wait();
-      setMsg({ type: "success", text: "Result submitted. Payouts sent." });
+      const receipt = await tx.wait();
+      const hash = receipt?.hash ?? tx.hash;
+      setMsg({ type: "success", text: hash ? `Result submitted. Payouts sent. Tx: ${String(hash).slice(0, 18)}…` : "Result submitted. Payouts sent." });
+      refreshUsdcBalance();
     } catch (e) {
       setMsg({ type: "error", text: decodeRevertReason(e) });
     } finally {
@@ -305,7 +347,9 @@ export default function App() {
       <div className="card">
         <h2>Wallet</h2>
         {!address ? (
-          <button onClick={connect}>Connect wallet</button>
+          <button onClick={connect} disabled={connectLoading}>
+            {connectLoading ? "Connecting…" : "Connect wallet"}
+          </button>
         ) : (
           <>
             <p>{address.slice(0, 10)}…{address.slice(-8)}</p>
@@ -327,9 +371,9 @@ export default function App() {
           </>
         )}
         {msg && (
-          <div className={msg.type}>
-            {msg.text}
-            <button type="button" onClick={() => setMsg(null)} style={{ marginLeft: "0.5rem", fontSize: "0.8rem", padding: "0.2rem 0.5rem" }} aria-label="Dismiss">
+          <div className={`msg-box msg-box-${msg.type}`} role="alert">
+            <span className="msg-text">{msg.text}</span>
+            <button type="button" className="msg-dismiss" onClick={() => setMsg(null)} aria-label="Dismiss message">
               Dismiss
             </button>
           </div>
@@ -349,21 +393,23 @@ export default function App() {
             <h2>Match ID (numeric seed)</h2>
             <label>Seed</label>
             <input value={matchIdInput} onChange={(e) => setMatchIdInput(e.target.value)} placeholder="1" />
-            <button onClick={fetchMatch}>Fetch match</button>
-            {matchInfo && <p className="status">{matchInfo}</p>}
+            <button onClick={fetchMatch} disabled={fetchMatchLoading}>
+              {fetchMatchLoading ? "Fetching…" : "Fetch match"}
+            </button>
+            {matchInfo && <p className={"status " + (matchInfo.startsWith("Status:") ? "status-ok" : matchInfo.startsWith("No match") ? "status-empty" : "status-err")}>{matchInfo}</p>}
           </div>
 
           <div className="card">
             <h2>Create match (owner only)</h2>
             <p>Entry: {formatUnits(deployed.entryAmount, 6)} USDC per player. Only click once per match — if you see &quot;Match already exists&quot;, use Enter match with other accounts instead.</p>
-            <button onClick={createMatch} disabled={txPending}>Create match</button>
+            <button onClick={createMatch} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Create match"}</button>
           </div>
 
           <div className="card">
             <h2>Enter match</h2>
             <p>Approve USDC and submit entry for the <strong>current</strong> account (the one shown in Wallet above).</p>
             <p style={{ marginTop: "0.5rem", color: "#94a3b8" }}>Adding another player? Switch to that account in MetaMask — the address above should update — then click Enter match.</p>
-            <button onClick={enterMatch} disabled={txPending}>Enter match</button>
+            <button onClick={enterMatch} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Enter match"}</button>
           </div>
 
           <div className="card">
@@ -375,7 +421,7 @@ export default function App() {
               </p>
             )}
             <input value={placementInput} onChange={(e) => setPlacementInput(e.target.value)} placeholder="0,1,2,3" />
-            <button onClick={submitResult} disabled={txPending}>Submit result</button>
+            <button onClick={submitResult} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Submit result"}</button>
           </div>
         </>
       )}
