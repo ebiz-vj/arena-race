@@ -96,14 +96,13 @@ arena-race/
 docs/
 ├── MVP_Execution_Plan.md      # Phased steps (spec → contract → engine → entry → launch)
 ├── PROGRESS_NOTES.md           # What’s done; next steps
-├── ARENA_RACE_TECHNICAL_DESIGN.md
+├── ARENA_RACE_TECHNICAL_DESIGN.md   # System, components, contract responsibilities
 ├── ARENA_RACE_ARCHITECTURE_SPEC.md  # Formulas, scoring, thresholds
-├── DEPLOY_RUNBOOK.md          # Sepolia deploy, verify, 50+ matches, expiration
-├── PRE_MAINNET_CHECKLIST.md   # Gate before mainnet; run verify:checklist
-├── KEY_MANAGEMENT_RUNBOOK.md   # Result signer, multisig, rotation
+├── DEPLOY_RUNBOOK.md          # Testnet deploy + verify; 50+ matches; pre-mainnet gate
+├── ENV_SETUP.md               # .env variables (wallet, RPC, Etherscan)
+├── KEY_MANAGEMENT_RUNBOOK.md  # Result signer, multisig, rotation
 ├── RED_TEAM_SCENARIOS.md      # Attack scenarios and handling
 └── REPLAY_RUNBOOK.md          # Replay and dispute flow
-(Env vars: arena-race/docs/ENV_SETUP.md)
 ```
 
 ---
@@ -121,7 +120,7 @@ docs/
    - `cd arena-race && npm run deploy:local` — deploys on Hardhat, runs 100 full matches and one expiration/refund flow.
 
 4. **Pre-mainnet gate**
-   - `cd arena-race && npm run verify:checklist` — runs contract tests, backend replay + 1,000-match sim, and local 100-match run. Use before mainnet; see [PRE_MAINNET_CHECKLIST.md](docs/PRE_MAINNET_CHECKLIST.md).
+   - `cd arena-race && npm run verify:checklist` — runs contract tests, backend replay + 1,000-match sim, and local 100-match run. Before mainnet see [DEPLOY_RUNBOOK.md](docs/DEPLOY_RUNBOOK.md) § Pre-mainnet gate.
 
 ---
 
@@ -130,7 +129,7 @@ docs/
 - Copy `arena-race/.env.example` to `arena-race/.env`.
 - **Required for Sepolia:** `DEPLOYER_PRIVATE_KEY`, optionally `SEPOLIA_RPC_URL`.
 - **Optional:** `ETHERSCAN_API_KEY` (verify contract), `USDC_ADDRESS` (use existing USDC).
-- Details: [arena-race/docs/ENV_SETUP.md](arena-race/docs/ENV_SETUP.md) or project docs.
+- Details: [docs/ENV_SETUP.md](docs/ENV_SETUP.md).
 
 **Do not commit `.env`.**
 

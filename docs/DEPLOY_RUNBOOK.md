@@ -19,7 +19,7 @@
 
 Create `arena-race/.env` from the template. **Only `ETHERSCAN_API_KEY` comes from Etherscan;** the rest from your wallet or RPC provider.
 
-- **Full guide:** [arena-race/docs/ENV_SETUP.md](../arena-race/docs/ENV_SETUP.md).
+- **Full guide:** [docs/ENV_SETUP.md](ENV_SETUP.md).
 - **Quick:** copy `arena-race/.env.example` to `arena-race/.env`, set:
   - **DEPLOYER_PRIVATE_KEY** — from your wallet (e.g. MetaMask), **not** from Etherscan.
   - **SEPOLIA_RPC_URL** — e.g. public RPC or Alchemy/Infura Sepolia URL.
@@ -96,3 +96,25 @@ Then each player calls `claimRefund(matchId)` from their wallet.
 - [ ] No critical bugs observed.
 
 **Optional:** Circle Sepolia USDC: `0xE1262c4856656d67c9c9cf0c6Acf12df5EfAB4AA`.
+
+---
+
+## 7. Pre-mainnet gate (Step 20)
+
+Before mainnet, **all** items below must be TRUE and signed off. Execution Plan: Phase 12, Step 20.
+
+| # | Requirement | How to verify |
+|---|-------------|----------------|
+| 1 | 100+ testnet matches successful | `deploy-and-run-local.ts` (MATCH_COUNT=100) or `run-testnet-matches.ts` on Sepolia. |
+| 2 | Entry expiration verified | Match with &lt;4 entries; after 5 min → Expired; no fee. Contract test + local script. |
+| 3 | Refund verified | Expired → claimRefund/refundMatch → 100% back; no fee. |
+| 4 | Tie payout verified | Tie-split payouts sum to pool; 38/30/20/12. Contract tests. |
+| 5 | Pause tested | pause() blocks entry/createMatch; submitResult/refund still work. |
+| 6 | Signer rotation tested | setResultSigner via owner; new signer can submit result. KEY_MANAGEMENT_RUNBOOK §3. |
+| 7 | Replay verified | Re-run from match_turns; tamper detected. Backend `replay/replay.test.ts`. REPLAY_RUNBOOK. |
+| 8 | 1,000 sim matches clean | Backend `simulation/run1000Matches.test.ts`. |
+| 9 | No unresolved critical bug | RED_TEAM_SCENARIOS documented; tests pass. |
+
+**One-command run:** From `arena-race`: `npm run verify:checklist` (contract tests + backend replay/sim + 100 matches).
+
+**Sign-off:** Tech lead verifies all items; date and notes recorded.

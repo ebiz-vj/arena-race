@@ -27,7 +27,7 @@
 | 9 | 16 — Concurrency stress | ✅ Complete | 4 and 8 simultaneous matches; all valid; no crash. |
 | 10 | 17 — Key management | ✅ Complete | KEY_MANAGEMENT_RUNBOOK.md; HSM/secret manager; multisig; signer rotation. |
 | 10 | 18 — Red-team pass | ✅ Complete | RED_TEAM_SCENARIOS.md; signature-replay test; all scenarios documented. |
-| 12 | 20 — Pre-mainnet checklist | ✅ Complete | PRE_MAINNET_CHECKLIST.md; 9 items with verification and evidence. |
+| 12 | 20 — Pre-mainnet checklist | ✅ Complete | DEPLOY_RUNBOOK.md § Pre-mainnet gate; 9 items with verification. |
 | 11+ | 19, 21 onward | ⏳ Not started | Audit (external); mainnet deploy, launch. |
 
 **Critical path:** Through Step 20 ✅ **done.** Next: Step 19 — Contract audit (provide TDD, coverage); Step 21 — Deploy to mainnet.
@@ -86,7 +86,7 @@
   - `arena-race/contracts/scripts/run-testnet-matches.ts` — run N matches against deployed escrow (+ optional expiration).
   - `arena-race/contracts/scripts/expire-and-refund.ts` — call expireMatch after 5 min (live testnet).
   - `docs/DEPLOY_RUNBOOK.md` — runbook (env, deploy, verify, 50 matches, expiration).
-  - `docs/ENV_SETUP.md` — where each env variable comes from (wallet vs RPC vs Etherscan).
+  - `docs/ENV_SETUP.md` — where each env variable comes from (wallet vs RPC vs Etherscan). (Moved from arena-race/docs.)
   - `arena-race/.env.example` — template; `arena-race/.gitignore` — includes `.env`.
 - **Config:**
   - `arena-race/hardhat.config.ts` — Sepolia network, 90s timeout, default RPC fallback (PublicNode), gas overrides in deploy script to avoid “replacement transaction underpriced.”
@@ -218,7 +218,7 @@
 ## Phase 12 — Production Readiness Gate
 
 ### Step 20 — Pre-Mainnet Checklist
-- **Deliverable:** `docs/PRE_MAINNET_CHECKLIST.md`
+- **Deliverable:** Pre-mainnet gate in `docs/DEPLOY_RUNBOOK.md` (§ Pre-mainnet gate).
 - **Content:** Nine requirements that must be TRUE before mainnet:
   1. 100+ testnet matches successful
   2. Entry expiration verified
@@ -324,13 +324,11 @@ docs/
   PROGRESS_NOTES.md   (this file)
   ARENA_RACE_TECHNICAL_DESIGN.md
   ARENA_RACE_ARCHITECTURE_SPEC.md
-  DEPLOY_RUNBOOK.md
-  PRE_MAINNET_CHECKLIST.md
+  DEPLOY_RUNBOOK.md   (testnet + pre-mainnet gate)
+  ENV_SETUP.md
   KEY_MANAGEMENT_RUNBOOK.md
   RED_TEAM_SCENARIOS.md
   REPLAY_RUNBOOK.md
-arena-race/docs/
-  ENV_SETUP.md
 ```
 
 ---

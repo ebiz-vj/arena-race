@@ -37,8 +37,8 @@ The `.env` file holds **secrets and config** for deploying to Sepolia. Only **on
 - **Do not** get this from Etherscan or any website.
 - It is the **private key** of the Ethereum account that will deploy the contract and spend Sepolia ETH for gas.
 - **Ways to get it:**
-  - **MetaMask:** Account menu (three dots) → “Account details” → “Show private key” (or “Export Private Key”). Use a **test** account, not a mainnet account with real funds.
-  - **New wallet:** Use Hardhat’s `npx hardhat console` and run `ethers.Wallet.createRandom()` to get a new address and private key; then send that address Sepolia ETH from a faucet.
+  - **MetaMask:** Account menu (three dots) → "Account details" → "Show private key" (or "Export Private Key"). Use a **test** account, not a mainnet account with real funds.
+  - **New wallet:** Use Hardhat's `npx hardhat console` and run `ethers.Wallet.createRandom()` to get a new address and private key; then send that address Sepolia ETH from a faucet.
 
 Use a **test-only** wallet and only put Sepolia ETH on it.
 
@@ -50,8 +50,8 @@ Use a **test-only** wallet and only put Sepolia ETH on it.
 - **Free options:**
   - **Public (no signup):**  
     `https://rpc.sepolia.org`
-  - **Alchemy:** [alchemy.com](https://www.alchemy.com/) → Create app → choose “Sepolia” → copy “HTTPS” URL.
-  - **Infura:** [infura.io](https://infura.io/) → Create project → choose “Sepolia” → copy endpoint URL.
+  - **Alchemy:** [alchemy.com](https://www.alchemy.com/) → Create app → choose "Sepolia" → copy "HTTPS" URL.
+  - **Infura:** [infura.io](https://infura.io/) → Create project → choose "Sepolia" → copy endpoint URL.
   - **QuickNode:** [quicknode.com](https://www.quicknode.com/) → Create endpoint → Sepolia → copy HTTP URL.
 
 For most use cases, `https://rpc.sepolia.org` is enough.
@@ -61,7 +61,7 @@ For most use cases, `https://rpc.sepolia.org` is enough.
 ### 3. `ETHERSCAN_API_KEY` — from Etherscan (only for verification)
 
 - **Only this one** comes from Etherscan.
-- **When you need it:** If you use a **script** or **plugin** that verifies the contract on Etherscan automatically. For **manual** “Verify and Publish” on [Sepolia Etherscan](https://sepolia.etherscan.io), you do **not** need this key.
+- **When you need it:** If you use a **script** or **plugin** that verifies the contract on Etherscan automatically. For **manual** "Verify and Publish" on [Sepolia Etherscan](https://sepolia.etherscan.io), you do **not** need this key.
 - **How to get it:**
   1. Go to [Etherscan](https://etherscan.io) and sign in (or create an account).
   2. Open the [API dashboard](https://etherscan.io/apidashboard).
