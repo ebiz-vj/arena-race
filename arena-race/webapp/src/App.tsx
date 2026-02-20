@@ -67,8 +67,11 @@ export default function App() {
     }).catch(() => setSignerMatchesContract(null));
   }, [provider, deployed?.escrow]);
 
+  // Poll queue status only when in queue. When match_found, update matchFound.
+  // Do NOT clear matchFound when status is idle (e.g. after switching to another
+  // MetaMask account) so local testing with 4 accounts keeps the same match visible.
   useEffect(() => {
-    if (!address || (!inQueue && !matchFound)) return;
+    if (!address || !inQueue) return;
     const t = setInterval(async () => {
       try {
         const res = await fetch(`${GAME_SERVER_URL}/queue/status?wallet=${encodeURIComponent(address)}`);
@@ -76,15 +79,14 @@ export default function App() {
         if (data.status === "match_found" && data.matchId) {
           setMatchFound({ matchId: data.matchId, entry_deadline: data.entry_deadline });
           setInQueue(false);
-        } else if (data.status === "idle") {
-          setMatchFound(null);
         }
+        // Never set matchFound to null from polling — only leaveQueue() or Play again clears it
       } catch {
         // ignore
       }
     }, 2000);
     return () => clearInterval(t);
-  }, [address, inQueue, matchFound]);
+  }, [address, inQueue]);
 
   const loadMatchState = async () => {
     if (!address || !deployed || !matchIdInput.trim()) return;

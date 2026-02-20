@@ -38,6 +38,9 @@ export default function Dashboard() {
             ? `Welcome back, ${welcomeName}. Ready to race?`
             : "Skill-based racing. Connect your wallet to enter the arena."}
         </p>
+        <Link to="/play" className="quick-action-card journey-cta-dashboard" style={{ marginTop: "var(--space-xl)", padding: "var(--space-lg) var(--space-2xl)", fontSize: "1.1rem" }}>
+          Enter the Arena — Start your journey →
+        </Link>
       </section>
 
       {!address ? (
@@ -97,6 +100,9 @@ export default function Dashboard() {
                 💳 Wallet
               </Link>
             </div>
+            <p style={{ marginTop: "var(--space-md)", color: "var(--text-muted)", fontSize: "0.9rem" }}>
+              Your journey: Lobby → Enter match → Arena → Results.
+            </p>
           </section>
         </>
       )}
