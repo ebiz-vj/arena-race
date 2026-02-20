@@ -28,6 +28,31 @@ Execute phases in order. Within each phase, complete steps in the order listed. 
 
 ---
 
+## For autonomous agents
+
+- **Paths:** All paths are relative to the repo root (e.g. `arena-race/webapp/src/...`). Use the same path format when creating or editing files regardless of OS.
+- **Optional choices:** When a step offers Option A vs B, choose as follows unless the user specifies otherwise:
+  - P2.4 (gate when not connected): **Option A** — do not gate routes; show "Connect wallet" prompts where needed. Add a one-line comment in the router: `// Auth: no route gate; unconnected users see connect prompts per GAME_PLATFORM_UI_EXECUTION_PLAN P2.4 Option A.`
+  - P5.2 (payouts source): **Option A** if chain event reading is available (escrow contract, `queryFilter` or equivalent); otherwise show the **empty state** ("Payout history will appear here after you complete matches" + link to Play). Document in one comment in `Rewards.tsx`: `// Payouts: chain events (Option A) | empty state (no backend).`
+- **Verification:** After each step, run `npm run build` from `arena-race/webapp`; it must succeed. After each phase, optionally start the dev server (`npm run dev`), open `http://localhost:5173`, and confirm the phase's "Done when" with a quick manual check (e.g. navigate to each route, connect wallet on Play).
+- **No contract or game-server changes** unless a step explicitly asks (e.g. P5.2 Option B). Keep `GAME_SERVER_URL` as `http://localhost:3000` for local development.
+
+---
+
+## Local development and testing
+
+This plan is written for **local development and testing** only.
+
+- **Assumptions:**
+  - Hardhat node (or equivalent) at `http://127.0.0.1:8545`; chain id `31337`.
+  - Game server at `http://localhost:3000` (queue + match APIs).
+  - Webapp dev server at `http://localhost:5173` (Vite default).
+  - Config: `arena-race/webapp/public/deployed-local.json`; in the app, load it from **`/deployed-local.json`** (Vite serves `public/` at `/`). Use cache-bust query (e.g. `?t=${Date.now()}`) when needed to avoid stale config after redeploy.
+- **How to run the full stack** (for manual verification): See [README.md](../README.md) — start node, deploy contracts, game server, signer, then webapp. No production env vars or secrets are required for this plan.
+- **Testing:** No automated E2E is required by this plan. Verification is build success plus optional manual click-through. Add or run E2E only if the user requests it.
+
+---
+
 # Phase P1 — Project Setup (Routing, Layout, Design Tokens)
 
 **Goal:** Add client-side routing and a reusable platform layout so all future pages live inside a consistent shell. Introduce design tokens (colors, spacing, typography) for a cohesive look.
@@ -72,6 +97,8 @@ Execute phases in order. Within each phase, complete steps in the order listed. 
 
 ### Step P1.4 — Router and route list
 
+**Execution order (agent):** Complete P1.5 first (extract game UI into `pages/Play.tsx`), then return to P1.4 to add the router and routes that reference Play and the placeholder pages. That way `/play` can render the extracted component immediately.
+
 - [ ] In `arena-race/webapp/src/App.tsx` (or a new `arena-race/webapp/src/AppRouter.tsx` if you prefer to keep App minimal):
   - Wrap the app with `BrowserRouter`.
   - Define routes (e.g. `createBrowserRouter` + `RouterProvider`, or `<Routes>` + `<Route>`):
@@ -88,6 +115,8 @@ Execute phases in order. Within each phase, complete steps in the order listed. 
 ---
 
 ### Step P1.5 — Move game flow into Play page
+
+**Execution order (agent):** Do this step before P1.4. Create `Play.tsx` and move the game UI here first; then in P1.4 add the router and routes that render Play.
 
 - [ ] Extract the current in-App game UI (wallet connect state, queue, match ID, create/enter, board, moves, submit result) into a dedicated component, e.g. `arena-race/webapp/src/pages/Play.tsx` (or `PlayPage.tsx`).
 - [ ] Keep shared state (provider, address, deployed config, chainId) either:
@@ -340,12 +369,27 @@ Execute phases in order. Within each phase, complete steps in the order listed. 
 
 # Execution checklist (agent)
 
-1. Start with Phase P1; complete every step and sign off before P2.
+1. Start with Phase P1; complete every step and sign off before P2. **Within P1, do step P1.5 before P1.4** (extract Play page first, then add router).
 2. After each step, verify “Done when” (e.g. run `npm run build`, run app, click through flows).
 3. Do not change contract or game-server behavior unless a step explicitly asks for a new API (e.g. P5.2 Option B).
 4. Keep existing game flow at `/play` working after every change (queue → match → enter → play → result).
 5. Use the repo’s existing stack: React, Vite, TypeScript, ethers, `deployed-local.json`; add only `react-router-dom` and any small libs (e.g. for Error Boundary or document title) as needed.
 6. Commit after each phase with a message like: `feat(webapp): P1 – routing, layout, design tokens`.
+
+---
+
+## Verification summary (is this plan ready for an agent?)
+
+| Criterion | Status |
+|-----------|--------|
+| Phases and steps are ordered and dependency-clear | Yes; P1.5 before P1.4 called out explicitly. |
+| Every step has a concrete "Done when" | Yes. |
+| File paths are explicit and repo-root-relative | Yes (`arena-race/webapp/src/...`). |
+| Optional choices have a default for the agent | Yes (For autonomous agents: P2.4 Option A, P5.2 Option A or empty state). |
+| Verification command is specified | Yes (`npm run build` from `arena-race/webapp`; optional manual check). |
+| Local-only assumptions and ports are documented | Yes (Local development and testing: 8545, 3000, 5173, deployed-local.json). |
+| No production or external APIs required | Yes; config from local JSON, game server localhost. |
+| Contract/game-server unchanged unless stated | Yes (checklist item 3). |
 
 ---
 
