@@ -15,6 +15,7 @@
     "signer": "node scripts/signer-server.js",
     "game-server": "npm run dev --prefix game-server",
     "verify:localhost": "node scripts/verify-localhost-escrow.js",
+    "kill:all": "node scripts/kill-all-ports.js",
     "dev:all": "concurrently -n node,deploy,signer,game,web -c blue,green,yellow,magenta,cyan \"npm run node:localhost\" \"wait-on http://127.0.0.1:8545 && npm run deploy:localhost\" \"wait-on http://127.0.0.1:8545 && npm run signer\" \"wait-on http://127.0.0.1:8545 && npm run game-server\" \"wait-on http://127.0.0.1:8545 && npm run dev --prefix webapp\""
   },
   "devDependencies": {
