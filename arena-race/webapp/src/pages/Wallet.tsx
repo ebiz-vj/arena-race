@@ -59,19 +59,27 @@ export default function Wallet() {
 
   if (!address) {
     return (
-      <div className="card">
-        <h1>Wallet</h1>
-        <p>Connect your wallet to view balance and network.</p>
-        <button onClick={connectWallet} disabled={connectLoading}>
-          {connectLoading ? "Connecting…" : "Connect wallet"}
-        </button>
-      </div>
+      <>
+        <section className="dashboard-hero">
+          <h1>Wallet</h1>
+          <p className="subtitle">View balance and network</p>
+        </section>
+        <div className="card" style={{ maxWidth: 420, margin: "0 auto", textAlign: "center" }}>
+          <p>Connect your wallet to view balance and network.</p>
+          <button onClick={connectWallet} disabled={connectLoading}>
+            {connectLoading ? "Connecting…" : "Connect wallet"}
+          </button>
+        </div>
+      </>
     );
   }
 
   return (
     <>
-      <h1>Wallet</h1>
+      <section className="dashboard-hero">
+        <h1>Wallet</h1>
+        <p className="subtitle">Balance, network & escrow</p>
+      </section>
 
       {wrongChain && (
         <div className="card" style={{ borderColor: "var(--error)", background: "rgba(248,113,113,0.1)" }}>
@@ -86,7 +94,7 @@ export default function Wallet() {
       )}
 
       <div className="card">
-        <h2>Network</h2>
+        <h2>🌐 Network</h2>
         <p>
           {chainId != null ? (
             <>
@@ -99,7 +107,7 @@ export default function Wallet() {
       </div>
 
       <div className="card">
-        <h2>USDC balance</h2>
+        <h2>💰 USDC balance</h2>
         <p className="stat-value" style={{ fontSize: "var(--text-xl)" }}>
           {usdcBalance} USDC
         </p>
@@ -110,7 +118,7 @@ export default function Wallet() {
 
       {deployed?.escrow && (
         <div className="card">
-          <h2>Escrow contract</h2>
+          <h2>📜 Escrow contract</h2>
           <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
             Contract: {deployed.escrow.slice(0, 10)}…{deployed.escrow.slice(-8)}
           </p>

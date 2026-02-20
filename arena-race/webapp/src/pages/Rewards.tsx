@@ -16,10 +16,13 @@ export default function Rewards() {
 
   return (
     <>
-      <h1>Rewards</h1>
+      <section className="dashboard-hero">
+        <h1>Rewards</h1>
+        <p className="subtitle">Payouts, leaderboard & achievements</p>
+      </section>
 
       <section className="rewards-section" aria-labelledby="rewards-payouts">
-        <h2 id="rewards-payouts">Payouts</h2>
+        <h2 id="rewards-payouts">💰 Payouts</h2>
         <div className="card">
           {!address ? (
             <>
@@ -33,14 +36,16 @@ export default function Rewards() {
               <p style={{ color: "var(--text-muted)" }}>
                 Payout history will appear here after you complete matches.
               </p>
-              <Link to="/play">Go to Play</Link>
+              <Link to="/play" className="button-as-link" style={{ marginTop: "var(--space-sm)" }}>
+                Go to Play
+              </Link>
             </>
           )}
         </div>
       </section>
 
       <section className="rewards-section" aria-labelledby="rewards-leaderboard">
-        <h2 id="rewards-leaderboard">Leaderboard</h2>
+        <h2 id="rewards-leaderboard">🏆 Leaderboard</h2>
         <div className="card">
           <p style={{ color: "var(--text-muted)" }}>Coming soon.</p>
           <table style={{ fontSize: "0.9rem", marginTop: "var(--space-md)", opacity: 0.8 }}>
@@ -62,7 +67,7 @@ export default function Rewards() {
       </section>
 
       <section className="rewards-section" aria-labelledby="rewards-achievements">
-        <h2 id="rewards-achievements">Achievements</h2>
+        <h2 id="rewards-achievements">🎯 Achievements</h2>
         <div className="card achievements-grid">
           <div className="achievement-card">
             <span className="achievement-icon" aria-hidden>🏆</span>

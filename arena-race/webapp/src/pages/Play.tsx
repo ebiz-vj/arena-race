@@ -190,9 +190,11 @@ export default function Play(props: PlayPageProps) {
   }, [matchFound?.matchId, setMatchIdInput]);
 
   return (
-    <div>
-      <h1>Play — Arena Race</h1>
-      <p>Connect to Localhost 8545. Queue for a match, create/enter, then play and submit results.</p>
+    <div className="play-page">
+      <section className="dashboard-hero" style={{ paddingBottom: "var(--space-lg)" }}>
+        <h1>Play</h1>
+        <p className="subtitle">Queue, create or enter a match, then play on the board.</p>
+      </section>
 
       {!deployed && (
         <div className="card">
@@ -223,25 +225,25 @@ export default function Play(props: PlayPageProps) {
       {deployed && address && (
         <>
           <div className="card">
-            <h2>Queue (find a match)</h2>
-            <p><strong>Each of the 4 players</strong> must click Join queue (same tier, e.g. Bronze-10). When the 4th joins, the server forms a match and everyone sees &quot;Match found&quot;. Then owner creates the match on-chain and all 4 enter. <strong>Order:</strong> Queue → Match found → Create on-chain + Enter ×4 → Start match below → Live match.</p>
+            <h2>⚡ Queue — find a match</h2>
+            <p><strong>Each of the 4 players</strong> joins the same tier. When the 4th joins, everyone sees &quot;Match found&quot;. Owner creates on-chain, then all 4 enter. <strong>Order:</strong> Queue → Match found → Create on-chain + Enter ×4 → Start match → Live.</p>
             <select value={queueTier} onChange={(e) => setQueueTier(e.target.value as "bronze-10" | "bronze-25")}>
               <option value="bronze-10">Bronze-10 (10 USDC)</option>
               <option value="bronze-25">Bronze-25 (25 USDC)</option>
             </select>
             <button onClick={joinQueue} disabled={queueLoading || inQueue}>{queueLoading ? "…" : inQueue ? "In queue…" : "Join queue"}</button>
-            {inQueue && <button type="button" onClick={leaveQueue} disabled={queueLoading}>Leave queue</button>}
+            {inQueue && <button type="button" className="btn-outline" onClick={leaveQueue} disabled={queueLoading}>Leave queue</button>}
             {matchFound && (
               <>
                 <p className="status status-ok">Match found! Entry deadline: {new Date(matchFound.entry_deadline * 1000).toLocaleTimeString()}.</p>
-                <p style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>Owner: create this match on-chain first. Then all 4 players use Enter match below.</p>
+                <p style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>Owner: create this match on-chain first. Then all 4 use Enter match below.</p>
                 <button type="button" onClick={() => createMatchWithId(matchFound!.matchId)} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Create this match on-chain (owner)"}</button>
               </>
             )}
           </div>
 
           <div className="card">
-            <h2>Match ID (numeric seed or 0x… from queue)</h2>
+            <h2>🔍 Match ID</h2>
             <label>Seed</label>
             <input value={matchIdInput} onChange={(e) => setMatchIdInput(e.target.value)} placeholder="1" />
             <button onClick={fetchMatch} disabled={fetchMatchLoading}>
@@ -251,72 +253,77 @@ export default function Play(props: PlayPageProps) {
           </div>
 
           <div className="card">
-            <h2>Create match (owner only)</h2>
-            <p>Entry: {formatUnits(deployed.entryAmount, 6)} USDC per player. Only click once per match — if you see &quot;Match already exists&quot;, use Enter match with other accounts instead.</p>
+            <h2>🏁 Create match (owner only)</h2>
+            <p>Entry: {formatUnits(deployed.entryAmount, 6)} USDC per player. Click once per match. If &quot;Match already exists&quot;, use Enter with other accounts.</p>
             <button onClick={createMatch} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Create match"}</button>
           </div>
 
           <div className="card">
-            <h2>Enter match</h2>
-            <p>Approve USDC and submit entry for the <strong>current</strong> account (the one shown in the header).</p>
-            <p style={{ marginTop: "0.5rem", color: "var(--text-muted)" }}>Adding another player? Switch to that account in MetaMask — the address in the header should update — then click Enter match.</p>
+            <h2>🎫 Enter match</h2>
+            <p>Approve USDC and submit entry for the <strong>current</strong> account (header). Switch account in MetaMask for another player, then Enter again.</p>
             <button onClick={enterMatch} disabled={txPending}>{txPending ? "Confirm in wallet…" : "Enter match"}</button>
           </div>
 
           <div className="card">
-            <h2>Live match (board and moves)</h2>
-            <p>For a match that is already Escrowed (4/4 entries): put its <strong>Match ID</strong> above (seed number or 0x… from queue), then click <strong>Start match / Refresh state</strong>. The game server will start the turn loop and the board will appear. Submit moves each turn (tile 0–48 for your 3 tokens). Ensure the game server is running and <code>ESCROW_ADDRESS</code> is set in its .env.</p>
+            <h2>🎮 Live match — board & moves</h2>
+            <p>Match already Escrowed? Set <strong>Match ID</strong> above, then <strong>Start match / Refresh state</strong>. Submit moves each turn (tile 0–48 for your 3 tokens).</p>
             <button type="button" onClick={startMatchThenLoad} disabled={matchActionLoading}>{matchActionLoading ? "…" : "Start match / Refresh state"}</button>
             {matchState && (
               <>
-                <p>Turn {matchState.turnIndex} — {matchState.turnDeadlineMs != null ? `deadline in ${Math.max(0, Math.ceil((matchState.turnDeadlineMs - Date.now()) / 1000))}s` : ""}</p>
-                <p>Scores: P0={matchState.scores[0]?.total ?? 0} P1={matchState.scores[1]?.total ?? 0} P2={matchState.scores[2]?.total ?? 0} P3={matchState.scores[3]?.total ?? 0}</p>
-                <div style={{ display: "inline-block", border: "1px solid var(--border)", marginBottom: "0.5rem" }}>
-                  {[0, 1, 2, 3, 4, 5, 6].map((row) => (
-                    <div key={row} style={{ display: "flex" }}>
-                      {[0, 1, 2, 3, 4, 5, 6].map((col) => {
+                <div className="game-hud">
+                  <span className="turn-badge">
+                    Turn {matchState.turnIndex}
+                    {matchState.turnDeadlineMs != null && (
+                      <span style={{ marginLeft: "var(--space-sm)", color: "var(--text-muted)", fontWeight: 400 }}>
+                        — {Math.max(0, Math.ceil((matchState.turnDeadlineMs - Date.now()) / 1000))}s left
+                      </span>
+                    )}
+                  </span>
+                  <div className="scores">
+                    {[0, 1, 2, 3].map((i) => (
+                      <span key={i} className="score-pill">P{i}: {matchState.scores[i]?.total ?? 0}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="game-board-wrap">
+                  <div className="game-board">
+                    {[0, 1, 2, 3, 4, 5, 6].map((row) =>
+                      [0, 1, 2, 3, 4, 5, 6].map((col) => {
                         const tile = row * 7 + col;
-                        const tokens: string[] = [];
+                        const tokenClasses: string[] = [];
                         matchState.tokenPositions?.forEach((positions, p) =>
-                          positions?.forEach((pos, t) => { if (pos === tile) tokens.push(`P${p}T${t}`); })
+                          positions?.forEach((pos) => {
+                            if (pos === tile) tokenClasses.push(`token-p${p} has-token`);
+                          })
                         );
                         return (
                           <div
-                            key={col}
-                            style={{
-                              width: 32,
-                              height: 32,
-                              border: "1px solid #475569",
-                              background: "var(--bg-secondary)",
-                              fontSize: 9,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                            title={`Tile ${tile} ${tokens.join(" ")}`}
+                            key={`${row}-${col}`}
+                            className={"game-tile " + (tokenClasses[0] ?? "")}
+                            title={`Tile ${tile}${tokenClasses.length ? " " + tokenClasses.join(" ") : ""}`}
                           >
-                            {tokens.slice(0, 2).join(" ") || ""}
+                            {tile}
                           </div>
                         );
-                      })}
-                    </div>
-                  ))}
+                      })
+                    )}
+                  </div>
                 </div>
                 {playerIndex != null && (
-                  <>
+                  <div style={{ marginTop: "var(--space-lg)" }}>
                     <label>Your moves (tile 0–48 for token 0, 1, 2)</label>
-                    <input value={matchMove0} onChange={(e) => setMatchMove0(e.target.value)} placeholder="0" style={{ width: 48 }} />
-                    <input value={matchMove1} onChange={(e) => setMatchMove1(e.target.value)} placeholder="1" style={{ width: 48 }} />
-                    <input value={matchMove2} onChange={(e) => setMatchMove2(e.target.value)} placeholder="2" style={{ width: 48 }} />
+                    <input value={matchMove0} onChange={(e) => setMatchMove0(e.target.value)} placeholder="0" style={{ width: 56 }} />
+                    <input value={matchMove1} onChange={(e) => setMatchMove1(e.target.value)} placeholder="1" style={{ width: 56 }} />
+                    <input value={matchMove2} onChange={(e) => setMatchMove2(e.target.value)} placeholder="2" style={{ width: 56 }} />
                     <button type="button" onClick={submitMatchAction} disabled={matchActionLoading}>{matchActionLoading ? "…" : "Submit move"}</button>
-                  </>
+                  </div>
                 )}
               </>
             )}
           </div>
 
           <div className="card">
-            <h2>Submit result (signer only)</h2>
+            <h2>📜 Submit result (signer only)</h2>
             <p>Placement: 1st, 2nd, 3rd, 4th as player indices (e.g. 0,1,2,3). <strong>Run the signer in a terminal</strong>: <code>cd arena-race && npm run signer</code> — otherwise you&apos;ll get &quot;Invalid signature&quot;.</p>
             {signerMatchesContract === false && (
               <p style={{ color: "var(--error)", marginBottom: "0.5rem" }}>

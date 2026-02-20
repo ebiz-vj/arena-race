@@ -31,18 +31,20 @@ export default function Dashboard() {
 
   return (
     <>
-      <h1>Dashboard</h1>
-      <p>
-        {welcomeName
-          ? `Welcome back, ${welcomeName}.`
-          : "Welcome to Arena Race."}
-      </p>
+      <section className="dashboard-hero">
+        <h1>Arena Race</h1>
+        <p className="subtitle">
+          {welcomeName
+            ? `Welcome back, ${welcomeName}. Ready to race?`
+            : "Skill-based racing. Connect your wallet to enter the arena."}
+        </p>
+      </section>
 
       {!address ? (
-        <div className="card">
-          <h2>Connect your wallet</h2>
-          <p>Connect your wallet to see your stats and play matches.</p>
-          <button onClick={connectWallet} disabled={connectLoading}>
+        <div className="card" style={{ maxWidth: 420, margin: "0 auto", textAlign: "center" }}>
+          <h2>Connect wallet</h2>
+          <p>Connect your wallet to see your stats and join matches.</p>
+          <button onClick={connectWallet} disabled={connectLoading} style={{ marginTop: "var(--space-md)" }}>
             {connectLoading ? "Connecting…" : "Connect wallet"}
           </button>
         </div>
@@ -50,23 +52,25 @@ export default function Dashboard() {
         <>
           <section className="dashboard-stats" aria-label="Stats">
             <div className="card stat-card">
+              <span className="stat-icon" aria-hidden>💰</span>
               <h2>USDC balance</h2>
-              <p className="stat-value">{usdcBalance} USDC</p>
+              <span className="stat-value">{usdcBalance} USDC</span>
             </div>
             <div className="card stat-card">
+              <span className="stat-icon" aria-hidden>🎮</span>
               <h2>Matches played</h2>
-              <p className="stat-value">—</p>
-              <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-                Play matches to see stats
-              </p>
+              <span className="stat-value">—</span>
+              <p style={{ fontSize: "0.8rem", marginTop: "var(--space-xs)" }}>Play to see stats</p>
             </div>
             <div className="card stat-card">
+              <span className="stat-icon" aria-hidden>🏆</span>
               <h2>Wins / Top-2</h2>
-              <p className="stat-value">—</p>
+              <span className="stat-value">—</span>
             </div>
             <div className="card stat-card">
+              <span className="stat-icon" aria-hidden>🥉</span>
               <h2>Current tier</h2>
-              <p className="stat-value">Bronze</p>
+              <span className="stat-value">Bronze</span>
             </div>
           </section>
 
@@ -74,21 +78,23 @@ export default function Dashboard() {
             <h2>Recent activity</h2>
             <div className="card">
               <p style={{ color: "var(--text-muted)" }}>No recent matches.</p>
-              <Link to="/play">Go to Play</Link>
+              <Link to="/play" className="button-as-link" style={{ marginTop: "var(--space-sm)" }}>
+                Go to Play
+              </Link>
             </div>
           </section>
 
           <section className="dashboard-actions" aria-label="Quick actions">
             <h2>Quick actions</h2>
             <div className="quick-actions">
-              <Link to="/play" className="card quick-action-card">
-                Find a match (Play)
+              <Link to="/play" className="quick-action-card">
+                ▶ Find a match
               </Link>
-              <Link to="/rewards" className="card quick-action-card">
-                View rewards
+              <Link to="/rewards" className="quick-action-card">
+                🎁 Rewards
               </Link>
-              <Link to="/wallet" className="card quick-action-card">
-                Wallet
+              <Link to="/wallet" className="quick-action-card">
+                💳 Wallet
               </Link>
             </div>
           </section>

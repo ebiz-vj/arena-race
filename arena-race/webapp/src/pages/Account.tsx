@@ -73,25 +73,34 @@ export default function Account() {
 
   if (!address) {
     return (
-      <div className="card">
-        <h1>Account</h1>
-        <p>Connect your wallet to see your account.</p>
-        <button onClick={connectWallet} disabled={connectLoading}>
-          {connectLoading ? "Connecting…" : "Connect wallet"}
-        </button>
-      </div>
+      <>
+        <section className="dashboard-hero">
+          <h1>Account</h1>
+          <p className="subtitle">Your profile and wallet info</p>
+        </section>
+        <div className="card" style={{ maxWidth: 420, margin: "0 auto", textAlign: "center" }}>
+          <p>Connect your wallet to see your account.</p>
+          <button onClick={connectWallet} disabled={connectLoading}>
+            {connectLoading ? "Connecting…" : "Connect wallet"}
+          </button>
+        </div>
+      </>
     );
   }
 
   return (
     <>
-      <h1>Account</h1>
-      <p>
-        <Link to="/">Dashboard</Link> · <Link to="/play">Play</Link>
-      </p>
+      <section className="dashboard-hero">
+        <h1>Account</h1>
+        <p className="subtitle">
+          <Link to="/" style={{ color: "var(--accent)" }}>Dashboard</Link>
+          {" · "}
+          <Link to="/play" style={{ color: "var(--accent)" }}>Play</Link>
+        </p>
+      </section>
 
       <div className="card">
-        <h2>Wallet</h2>
+        <h2>👛 Wallet</h2>
         <p>
           <span style={{ wordBreak: "break-all", fontFamily: "var(--font-mono)", fontSize: "0.9rem" }}>
             {address}
@@ -103,7 +112,7 @@ export default function Account() {
       </div>
 
       <div className="card">
-        <h2>Network</h2>
+        <h2>🌐 Network</h2>
         <p>
           {chainId != null
             ? `${getNetworkName(chainId)} (${chainId})`
@@ -112,12 +121,12 @@ export default function Account() {
       </div>
 
       <div className="card">
-        <h2>USDC balance</h2>
+        <h2>💰 USDC balance</h2>
         <p><strong>{usdcBalance}</strong> USDC</p>
       </div>
 
       <div className="card">
-        <h2>Display name</h2>
+        <h2>✏️ Display name</h2>
         <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
           Stored locally per wallet. No backend.
         </p>
