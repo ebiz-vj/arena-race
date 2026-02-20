@@ -437,6 +437,19 @@ export default function Play(props: PlayPageProps) {
                 </div>
               ) : (
                 <>
+                  {/* "Your turn" highlight when you're a participant */}
+                  {playerIndex != null && (
+                    <div className="arena-your-turn-banner" role="status" aria-live="polite">
+                      <span className="arena-your-turn-glow" aria-hidden />
+                      <span className="arena-your-turn-text">Your turn — choose destinations and submit below</span>
+                      {matchState.turnDeadlineMs != null && (
+                        <span className="arena-your-turn-timer">
+                          {Math.max(0, Math.ceil((matchState.turnDeadlineMs - Date.now()) / 1000))}s left
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   <div className="game-hud">
                     <span className="turn-badge">
                       Turn {matchState.turnIndex}
@@ -457,16 +470,24 @@ export default function Play(props: PlayPageProps) {
 
                   <div className="game-board-container">
                     <div className="game-board-wrap">
+                      <div className="game-board-legend">
+                        <span className="game-legend-item token-p0">P0</span>
+                        <span className="game-legend-item token-p1">P1</span>
+                        <span className="game-legend-item token-p2">P2</span>
+                        <span className="game-legend-item token-p3">P3</span>
+                      </div>
+                      <div className="game-board-labels game-board-labels-top" aria-hidden>Finish ↑</div>
                       <div className="game-board">
                         {[0, 1, 2, 3, 4, 5, 6].map((row) =>
                           [0, 1, 2, 3, 4, 5, 6].map((col) => {
                             const tile = row * 7 + col;
-                            const tokenClasses: string[] = [];
+                            const tokensHere: { p: number; t: number }[] = [];
                             matchState.tokenPositions?.forEach((positions, p) =>
-                              positions?.forEach((pos) => {
-                                if (pos === tile) tokenClasses.push(`token-p${p} has-token`);
+                              positions?.forEach((pos, t) => {
+                                if (pos === tile) tokensHere.push({ p, t });
                               })
                             );
+                            const tokenClasses = tokensHere.map(({ p }) => `token-p${p} has-token`);
                             const isSelectable = playerIndex != null;
                             const handleTileClick = () => {
                               if (playerIndex == null) return;
@@ -479,25 +500,27 @@ export default function Play(props: PlayPageProps) {
                                 setMatchMove2("");
                               }
                             };
+                            const rowClass = row === 0 ? " game-tile-row-finish" : row === 6 ? " game-tile-row-start" : "";
                             const tileContent = (
                               <>
-                                <span className="game-tile-num">{tile}</span>
-                                {tokenClasses.length > 0 && (
-                                  <span className="game-tile-tokens" aria-hidden>
-                                    {tokenClasses.map((c) => (
-                                      <span key={c} className={"game-tile-dot " + c} />
+                                <span className="game-tile-id" title={`Tile ${tile}`}>{tile}</span>
+                                {tokensHere.length > 0 && (
+                                  <span className="game-tile-racers" aria-hidden>
+                                    {tokensHere.map(({ p, t }) => (
+                                      <span key={`${p}-${t}`} className={`game-racer token-p${p}`} title={`Player ${p} token ${t}`}>
+                                        {t}
+                                      </span>
                                     ))}
                                   </span>
                                 )}
                               </>
                             );
-                            const rowClass = row === 0 ? " game-tile-row-finish" : "";
                             return isSelectable ? (
                               <button
                                 type="button"
                                 key={`${row}-${col}`}
                                 className={"game-tile game-tile-selectable " + (tokenClasses[0] ?? "") + rowClass}
-                                title={`Tile ${tile}${tokenClasses.length ? " — " + tokenClasses.join(" ") : ""} — Click to set move`}
+                                title={`Tile ${tile}${tokensHere.length ? " — " + tokensHere.map(({ p, t }) => `P${p}-${t}`).join(", ") : ""} — Click to set move`}
                                 onClick={handleTileClick}
                               >
                                 {tileContent}
@@ -506,7 +529,7 @@ export default function Play(props: PlayPageProps) {
                               <div
                                 key={`${row}-${col}`}
                                 className={"game-tile " + (tokenClasses[0] ?? "") + rowClass}
-                                title={`Tile ${tile}${tokenClasses.length ? " " + tokenClasses.join(" ") : ""}`}
+                                title={`Tile ${tile}${tokensHere.length ? " " + tokensHere.map(({ p, t }) => `P${p} token ${t}`).join(", ") : ""}`}
                               >
                                 {tileContent}
                               </div>
@@ -514,6 +537,7 @@ export default function Play(props: PlayPageProps) {
                           })
                         )}
                       </div>
+                      <div className="game-board-labels game-board-labels-bottom" aria-hidden>Start ↓</div>
                     </div>
                   </div>
 
