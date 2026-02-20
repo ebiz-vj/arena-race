@@ -14,9 +14,12 @@
     "deploy:localhost": "hardhat run contracts/scripts/deploy-localhost.ts --network localhost",
     "signer": "node scripts/signer-server.js",
     "game-server": "npm run dev --prefix game-server",
-    "verify:localhost": "node scripts/verify-localhost-escrow.js"
+    "verify:localhost": "node scripts/verify-localhost-escrow.js",
+    "dev:all": "concurrently -n node,deploy,signer,game,web -c blue,green,yellow,magenta,cyan \"npm run node:localhost\" \"wait-on http://127.0.0.1:8545 && npm run deploy:localhost\" \"wait-on http://127.0.0.1:8545 && npm run signer\" \"wait-on http://127.0.0.1:8545 && npm run game-server\" \"wait-on http://127.0.0.1:8545 && npm run dev --prefix webapp\""
   },
   "devDependencies": {
+    "concurrently": "^9.1.0",
+    "wait-on": "^8.0.1",
     "dotenv": "^16.3.1",
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
     "@openzeppelin/contracts": "^5.0.2",

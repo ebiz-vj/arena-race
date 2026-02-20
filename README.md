@@ -178,6 +178,18 @@ docs/
 
 Run the chain, deploy contracts, game server, signer, and webapp to play the full game (queue → match → enter → play → result).
 
+**Single command (all services):**
+
+```bash
+cd arena-race
+npm install
+npm run dev:all
+```
+
+This starts the Hardhat node, waits for it, deploys contracts once, then starts the result signer, game server, and webapp. Open **http://localhost:5173** when the web process is ready. Stop everything with `Ctrl+C`.
+
+**Manual steps (alternative):**
+
 **1. Start the local chain (leave this terminal open):**
 
 ```bash
