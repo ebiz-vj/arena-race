@@ -10,6 +10,9 @@ import {
   tryFormMatch,
   setAssignmentsForMatch,
   getAssignment,
+  clearAssignment,
+  clearExpiredAssignments,
+  clearAllAssignments,
   type Tier,
 } from "../queue";
 
@@ -20,6 +23,10 @@ const VALID_TIERS: Tier[] = ["bronze-10", "bronze-25"];
 
 function isValidTier(tier: string): tier is Tier {
   return VALID_TIERS.includes(tier as Tier);
+}
+
+function isWalletAddress(wallet: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(wallet);
 }
 
 function generateMatchId(): string {
@@ -40,10 +47,18 @@ export function queueRouter(): Router {
       res.status(400).json({ error: "tier must be bronze-10 or bronze-25" });
       return;
     }
-    const playerId = wallet;
+    if (!isWalletAddress(wallet)) {
+      res.status(400).json({ error: "wallet must be a valid 0x address" });
+      return;
+    }
+    clearExpiredAssignments();
+    // Always start a fresh queue attempt for this wallet.
+    clearAssignment(wallet);
+    const normalizedWallet = wallet.toLowerCase();
+    const playerId = normalizedWallet;
     queueStore.add(tier as Tier, {
       playerId,
-      wallet,
+      wallet: normalizedWallet,
       joinedAt: Date.now(),
       tier: tier as Tier,
     });
@@ -89,8 +104,20 @@ export function queueRouter(): Router {
       res.status(400).json({ error: "tier must be bronze-10 or bronze-25" });
       return;
     }
-    queueStore.remove(tier as Tier, wallet);
+    if (!isWalletAddress(wallet)) {
+      res.status(400).json({ error: "wallet must be a valid 0x address" });
+      return;
+    }
+    queueStore.remove(tier as Tier, wallet.toLowerCase());
+    clearAssignment(wallet);
     res.status(200).json({ status: "left" });
+  });
+
+  /** POST /queue/reset — clear queue and match assignments (for Reset everything in local dev). */
+  router.post("/reset", (_req, res) => {
+    queueStore.clearAll();
+    clearAllAssignments();
+    res.status(200).json({ status: "ok", message: "Queue and match assignments cleared." });
   });
 
   /** GET /queue/status?wallet=0x... — polling: match_found or queued/idle */
@@ -100,6 +127,11 @@ export function queueRouter(): Router {
       res.status(400).json({ error: "wallet query required" });
       return;
     }
+    if (!isWalletAddress(wallet)) {
+      res.status(400).json({ error: "wallet must be a valid 0x address" });
+      return;
+    }
+    clearExpiredAssignments();
     const assignment = getAssignment(wallet);
     if (assignment) {
       res.status(200).json({

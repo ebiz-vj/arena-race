@@ -1,5 +1,7 @@
 /**
- * Minimal ABI for ArenaRaceEscrow.matches(bytes32). Must match compiled contract (8 outputs).
+ * Minimal ABI for ArenaRaceEscrow.matches(bytes32).
+ * Important: public mapping getter omits fixed-size array fields (playerWallets),
+ * so this returns 8 outputs in the deployed contract ABI.
  */
 export const ESCROW_MATCHES_ABI = [
   {

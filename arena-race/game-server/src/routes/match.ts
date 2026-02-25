@@ -3,7 +3,7 @@
  */
 import { Router } from "express";
 import { config } from "../config";
-import { checkEntryFlow, getMatchInfoFromChain } from "../escrow";
+import { checkEntryFlow, getMatchInfoFromChain, getMatchStatusFromChain } from "../escrow";
 import { EscrowMatchStatus } from "../escrow";
 import { getDbInstance } from "../db";
 import { matches as matchesDb } from "../db";
@@ -12,6 +12,44 @@ import { replayMatchFromDb } from "../replayFromDb";
 
 export function matchRouter(): Router {
   const router = Router();
+
+  /** GET /match/status?matchId=0x...&escrowAddress=0x... — match status from chain. Use escrowAddress from request so frontend and server always use same contract. */
+  router.get("/status", async (req, res) => {
+    const matchId = req.query.matchId as string;
+    const escrowFromQuery = typeof req.query.escrowAddress === "string" && req.query.escrowAddress.startsWith("0x")
+      ? req.query.escrowAddress
+      : "";
+    if (!matchId || typeof matchId !== "string" || !matchId.startsWith("0x")) {
+      res.status(400).json({ error: "matchId required (0x...)" });
+      return;
+    }
+    const escrowAddress = escrowFromQuery || config.escrowAddress;
+    if (!escrowAddress) {
+      res.status(503).json({ error: "escrow not configured; send escrowAddress in query or set ESCROW_ADDRESS / deployed-local.json" });
+      return;
+    }
+    try {
+      const info = await getMatchStatusFromChain(
+        config.chainRpcUrl,
+        escrowAddress,
+        matchId
+      );
+      if (!info) {
+        console.warn(
+          "[match/status] 404: match not found on chain",
+          "| matchId:", matchId.slice(0, 18) + "…",
+          "| escrow:", escrowAddress.slice(0, 10) + "…",
+          "| rpc:", config.chainRpcUrl?.slice(0, 40) + "…"
+        );
+        res.status(404).json({ error: "match not found or no contract" });
+        return;
+      }
+      res.status(200).json(info);
+    } catch (e) {
+      console.error("[match/status] error:", e);
+      res.status(500).json({ error: "failed to read match from chain" });
+    }
+  });
 
   /** GET /match/entry-status?matchId=0x...&entry_deadline=123 */
   router.get("/entry-status", async (req, res) => {
@@ -49,13 +87,21 @@ export function matchRouter(): Router {
   });
 
   /**
-   * POST /match/start — body: { matchId }.
-   * Server checks entry-status; only starts turn loop when shouldStart (Escrowed).
+   * POST /match/start — body: { matchId, escrowAddress? }.
+   * Server checks entry-status; only starts turn loop when shouldStart (Escrowed). Use escrowAddress from body when provided so frontend and server use same contract.
    */
   router.post("/start", async (req, res) => {
     const matchId = req.body?.matchId;
+    const escrowFromBody = typeof req.body?.escrowAddress === "string" && req.body.escrowAddress.startsWith("0x")
+      ? req.body.escrowAddress
+      : "";
     if (!matchId || typeof matchId !== "string") {
       res.status(400).json({ error: "matchId required" });
+      return;
+    }
+    const escrowAddress = escrowFromBody || config.escrowAddress;
+    if (!escrowAddress) {
+      res.status(503).json({ error: "escrow not configured; send escrowAddress in body or set ESCROW_ADDRESS / deployed-local.json" });
       return;
     }
     const db = getDbInstance();
@@ -65,7 +111,7 @@ export function matchRouter(): Router {
     }
     let row = matchesDb.getMatchByMatchId(db, matchId);
     if (!row) {
-      const chainInfo = await getMatchInfoFromChain(config.chainRpcUrl, config.escrowAddress, matchId);
+      const chainInfo = await getMatchInfoFromChain(config.chainRpcUrl, escrowAddress, matchId);
       if (!chainInfo || chainInfo.status !== EscrowMatchStatus.Escrowed) {
         res.status(404).json({ error: "match not found or not escrowed; create match via queue or legacy, then enter with 4 players" });
         return;
@@ -79,7 +125,7 @@ export function matchRouter(): Router {
     }
     const outcome = await checkEntryFlow(
       config.chainRpcUrl,
-      config.escrowAddress,
+      escrowAddress,
       matchId,
       row.entry_deadline,
       Math.floor(Date.now() / 1000)
@@ -92,7 +138,7 @@ export function matchRouter(): Router {
         "| matchId:",
         matchId.slice(0, 18) + "…",
         "| escrow:",
-        config.escrowAddress ? config.escrowAddress.slice(0, 10) + "…" : "(not set)"
+        escrowAddress ? escrowAddress.slice(0, 10) + "…" : "(not set)"
       );
       res.status(400).json({ error: "cannot start", reason });
       return;

@@ -81,6 +81,7 @@ async function main() {
   console.log("2. Import one of the Hardhat node accounts (see terminal where 'npx hardhat node' is running)");
   console.log("3. Start the webapp: cd webapp && npm run dev");
   console.log("4. Open http://localhost:5173 and connect wallet");
+  console.log("\n(Deploy exits here; node, signer, game and web keep running in dev:all.)");
 }
 
 main().catch((err) => {

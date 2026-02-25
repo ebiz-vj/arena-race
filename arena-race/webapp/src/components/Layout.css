@@ -106,10 +106,24 @@
   padding: var(--space-sm) var(--space-xl) !important;
 }
 
+.layout-tab-badge {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: rgba(0, 229, 204, 0.12);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(0, 229, 204, 0.25);
+}
 .layout-address {
   font-family: var(--font-mono);
   font-size: 0.85rem;
   color: var(--cyan);
+}
+.layout-switch-hint {
+  font-size: 0.7rem;
+  color: var(--accent);
+  font-style: italic;
 }
 .layout-balance {
   font-family: var(--font-display);
@@ -128,6 +142,21 @@
   transition: background 0.2s;
 }
 .layout-account-link:hover { background: rgba(255, 176, 32, 0.15); }
+
+.layout-reset-btn {
+  margin: 0 !important;
+  padding: var(--space-xs) var(--space-sm) !important;
+  font-size: 0.75rem !important;
+  background: transparent !important;
+  color: var(--text-muted) !important;
+  border: 1px solid var(--border) !important;
+}
+.layout-reset-btn:hover {
+  color: var(--cyan) !important;
+  border-color: var(--cyan) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
 
 .layout-disconnect-btn {
   margin: 0 !important;

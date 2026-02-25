@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { Contract, formatUnits } from "ethers";
+import { Contract, formatUnits, JsonRpcProvider, zeroPadValue } from "ethers";
+import type { Provider } from "ethers";
 import { ESCROW_ABI, ERC20_ABI } from "./abis";
 import { useWallet } from "./context/WalletContext";
 import Layout from "./components/Layout";
@@ -12,7 +13,6 @@ import Wallet from "./pages/Wallet";
 import Account from "./pages/Account";
 import {
   decodeRevertReason,
-  matchIdToBytes32,
   resolveMatchId,
   STATUS_NAMES,
   SIGNER_URL,
@@ -20,15 +20,111 @@ import {
 } from "./pages/Play";
 import type { PlayPageProps, MatchState } from "./pages/Play";
 
+const PARTICIPANTS_STORAGE_KEY = "arena_race_participants";
+
+function loadStoredParticipants(): (string | null)[] {
+  try {
+    const raw = sessionStorage.getItem(PARTICIPANTS_STORAGE_KEY);
+    if (!raw) return [null, null, null, null];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 4) return [null, null, null, null];
+    return parsed.map((v) => (typeof v === "string" && v.startsWith("0x") ? v : null));
+  } catch {
+    return [null, null, null, null];
+  }
+}
+
+function saveParticipants(arr: (string | null)[]) {
+  try {
+    sessionStorage.setItem(PARTICIPANTS_STORAGE_KEY, JSON.stringify(arr));
+  } catch {
+    // ignore
+  }
+}
+
+/** Normalize matchId to 0x + 64 lowercase hex so contract lookup is consistent. */
+function normalizeMatchIdHex(id: string): string {
+  const t = id.trim();
+  if (/^0x[0-9a-fA-F]{64}$/.test(t)) return "0x" + t.slice(2).toLowerCase();
+  return t;
+}
+
+/** Read match status from chain. matchIdBytes32 must be the same key used at create (use resolveMatchId). */
+async function fetchMatchFromChain(
+  provider: Provider,
+  escrowAddress: string,
+  matchIdBytes32: string
+): Promise<string | null> {
+  try {
+    const key = zeroPadValue(matchIdBytes32, 32);
+    const escrow = new Contract(escrowAddress, ESCROW_ABI, provider);
+    const m = await escrow.matches(key);
+    const row = m as unknown as Record<string, unknown> & Array<unknown>;
+    const pick = (...keys: Array<string | number>) => {
+      for (const keyCandidate of keys) {
+        const v = typeof keyCandidate === "number" ? row?.[keyCandidate] : row?.[keyCandidate];
+        if (v !== undefined && v !== null) return v;
+      }
+      return undefined;
+    };
+    const toNumber = (v: unknown, fallback = 0) => {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "bigint") return Number(v);
+      if (typeof v === "string" && v.trim() !== "") {
+        const parsed = Number(v);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return fallback;
+    };
+    const toBigInt = (v: unknown, fallback: bigint = 0n) => {
+      if (typeof v === "bigint") return v;
+      if (typeof v === "number" && Number.isFinite(v)) return BigInt(Math.trunc(v));
+      if (typeof v === "string" && v.trim() !== "") {
+        try {
+          return BigInt(v);
+        } catch {
+          return fallback;
+        }
+      }
+      return fallback;
+    };
+    // Current getter ABI (8 outputs): entries=4, status=5, entryDeadline=7.
+    // Include legacy fallbacks for older local builds.
+    const entryDeadline = toNumber(pick("entryDeadline", 7, 8, 11), 0);
+    if (entryDeadline === 0) return null;
+    const statusVal = toNumber(pick("status", 5, 6, 9), 0);
+    const entriesReceived = toNumber(pick("entriesReceived", 4, 5, 8), 0);
+    const poolAmount = toBigInt(pick("poolAmount", 3), 0n);
+    const status = STATUS_NAMES[statusVal] ?? "?";
+    return `Status: ${status} | Entries: ${entriesReceived}/4 | Pool: ${formatUnits(poolAmount, 6)} USDC`;
+  } catch (e) {
+    console.warn("[fetchMatchFromChain]", (e as Error)?.message ?? e);
+    return null;
+  }
+}
+
 export default function App() {
-  const { provider, address, deployed, chainId, usdcBalance, refreshBalance } = useWallet();
-  const [matchIdInput, setMatchIdInput] = useState("1");
+  const { provider, address, deployed, chainId, usdcBalance, refreshBalance, refreshAccount, loadDeployed } = useWallet();
+  const [participantAddresses, setParticipantAddressesState] = useState<(string | null)[]>(loadStoredParticipants);
+  const setParticipant = (slot: number, value: string | null) => {
+    if (slot < 0 || slot > 3) return;
+    setParticipantAddressesState((prev) => {
+      const next = [...prev];
+      next[slot] = value;
+      saveParticipants(next);
+      return next;
+    });
+  };
+  const [matchIdInput, setMatchIdInput] = useState("");
   const [placementInput, setPlacementInput] = useState("0,1,2,3");
   const [msg, setMsg] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [matchInfo, setMatchInfo] = useState<string>("");
   const [txPending, setTxPending] = useState(false);
   const [escrowHasCode, setEscrowHasCode] = useState<boolean | null>(null);
+  const [escrowCheckTrigger, setEscrowCheckTrigger] = useState(0);
+  const refreshEscrowCheck = () => setEscrowCheckTrigger((t) => t + 1);
   const [signerMatchesContract, setSignerMatchesContract] = useState<boolean | null>(null);
+  const [escrowOwner, setEscrowOwner] = useState<string | null>(null);
   const [fetchMatchLoading, setFetchMatchLoading] = useState(false);
   const [queueTier, setQueueTier] = useState<"bronze-10" | "bronze-25">("bronze-10");
   const [inQueue, setInQueue] = useState(false);
@@ -40,6 +136,11 @@ export default function App() {
   const [matchMove1, setMatchMove1] = useState("");
   const [matchMove2, setMatchMove2] = useState("");
   const [matchActionLoading, setMatchActionLoading] = useState(false);
+  /** Increment on Reset so in-flight queue poll responses are ignored and don't restore old matchFound. */
+  const queuePollGenerationRef = useRef(0);
+  /** Once we've successfully used the contract (create/enter), don't let getCode overwrite to false (avoids RPC quirks). */
+  const contractConfirmedRef = useRef(false);
+  const lastEscrowAddressRef = useRef<string | null>(null);
 
   useEffect(() => {
     setMsg(null);
@@ -47,10 +148,23 @@ export default function App() {
 
   useEffect(() => {
     if (!provider || !deployed?.escrow) return;
-    provider.getCode(deployed.escrow).then((code) => {
-      setEscrowHasCode(code !== "0x" && code.length > 4);
-    }).catch(() => setEscrowHasCode(null));
-  }, [provider, deployed?.escrow]);
+    const escrowAddr = deployed.escrow;
+    if (lastEscrowAddressRef.current !== escrowAddr) {
+      lastEscrowAddressRef.current = escrowAddr;
+      contractConfirmedRef.current = false;
+    }
+    provider.getCode(escrowAddr).then((code) => {
+      const hasCode = code !== "0x" && code.length > 4;
+      if (hasCode) {
+        setEscrowHasCode(true);
+        contractConfirmedRef.current = true;
+      } else {
+        if (!contractConfirmedRef.current) setEscrowHasCode(false);
+      }
+    }).catch(() => {
+      if (!contractConfirmedRef.current) setEscrowHasCode(null);
+    });
+  }, [provider, deployed?.escrow, escrowCheckTrigger]);
 
   useEffect(() => {
     if (!provider || !deployed?.escrow) return;
@@ -58,43 +172,50 @@ export default function App() {
     Promise.all([
       fetch(SIGNER_URL + "/whoami").then((r) => r.ok ? r.json() : null).catch(() => null),
       escrow.resultSigner().catch(() => null),
-    ]).then(([who, contractSigner]) => {
+      escrow.owner().catch(() => null),
+    ]).then(([who, contractSigner, owner]) => {
       if (who?.address && contractSigner) {
         setSignerMatchesContract(who.address.toLowerCase() === String(contractSigner).toLowerCase());
       } else {
         setSignerMatchesContract(null);
       }
-    }).catch(() => setSignerMatchesContract(null));
+      const raw = owner != null ? String(owner) : "";
+      setEscrowOwner(/^0x[0-9a-fA-F]{40}$/.test(raw) ? raw.toLowerCase() : null);
+    }).catch(() => {
+      setSignerMatchesContract(null);
+      setEscrowOwner(null);
+    });
   }, [provider, deployed?.escrow]);
 
-  // Poll queue status only when in queue. When match_found, update matchFound.
-  // Do NOT clear matchFound when status is idle (e.g. after switching to another
-  // MetaMask account) so local testing with 4 accounts keeps the same match visible.
+  // Poll queue status when in queue (use first participant wallet if set, else current address).
   useEffect(() => {
-    if (!address || !inQueue) return;
+    const wallet = participantAddresses[0] || address;
+    if (!wallet || !inQueue) return;
     const t = setInterval(async () => {
+      const generationWhenFired = queuePollGenerationRef.current;
       try {
-        const res = await fetch(`${GAME_SERVER_URL}/queue/status?wallet=${encodeURIComponent(address)}`);
+        const res = await fetch(`${GAME_SERVER_URL}/queue/status?wallet=${encodeURIComponent(wallet)}`);
         const data = await res.json();
+        if (generationWhenFired !== queuePollGenerationRef.current) return;
         if (data.status === "match_found" && data.matchId) {
           setMatchFound({ matchId: data.matchId, entry_deadline: data.entry_deadline });
           setInQueue(false);
         }
-        // Never set matchFound to null from polling — only leaveQueue() or Play again clears it
       } catch {
         // ignore
       }
     }, 2000);
     return () => clearInterval(t);
-  }, [address, inQueue]);
+  }, [address, participantAddresses, inQueue]);
 
   const loadMatchState = async () => {
-    if (!address || !deployed || !matchIdInput.trim()) return;
-    const mid = resolveMatchId(matchIdInput);
+    if (!matchIdInput.trim() || !address) return;
+    const mid = zeroPadValue(resolveMatchId(matchIdInput.trim()), 32);
+    const escrowParam = deployed?.escrow ? `&escrowAddress=${encodeURIComponent(deployed.escrow)}` : "";
     try {
-      const [stateRes, escrow] = await Promise.all([
+      const [stateRes, statusRes] = await Promise.all([
         fetch(`${GAME_SERVER_URL}/match/state?matchId=${encodeURIComponent(mid)}`),
-        provider ? new Contract(deployed.escrow, ESCROW_ABI, provider).matches(mid) : null,
+        fetch(`${GAME_SERVER_URL}/match/status?matchId=${encodeURIComponent(mid)}${escrowParam}`),
       ]);
       if (stateRes.ok) {
         const data = await stateRes.json();
@@ -107,13 +228,25 @@ export default function App() {
       } else {
         setMatchState(null);
       }
-      const wallets = escrow && (Array.isArray(escrow.playerWallets) ? escrow.playerWallets : (escrow as unknown[])[4]);
-      if (Array.isArray(wallets)) {
-        const idx = wallets.findIndex((w: string) => String(w).toLowerCase() === address.toLowerCase());
-        setPlayerIndex(idx >= 0 ? idx : null);
-      } else {
-        setPlayerIndex(null);
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        const wallets = statusData.playerWallets;
+        if (Array.isArray(wallets) && wallets.length === 4) {
+          const idx = wallets.findIndex((w: string) => String(w).toLowerCase() === address.toLowerCase());
+          setPlayerIndex(idx >= 0 ? idx : null);
+          return;
+        }
       }
+      // Fallback for local single-screen flow when chain getter doesn't expose wallet slots.
+      const localPlayers = participantAddresses
+        .filter((w): w is string => typeof w === "string" && w.startsWith("0x"))
+        .map((w) => w.toLowerCase());
+      if (localPlayers.length === 4) {
+        const idx = localPlayers.findIndex((w) => w === address.toLowerCase());
+        setPlayerIndex(idx >= 0 ? idx : null);
+        return;
+      }
+      setPlayerIndex(null);
     } catch {
       setMatchState(null);
       setPlayerIndex(null);
@@ -121,22 +254,28 @@ export default function App() {
   };
 
   const startMatchThenLoad = async () => {
-    if (!address || !deployed || !matchIdInput.trim()) return;
-    const mid = resolveMatchId(matchIdInput);
+    if (!provider || !deployed || !matchIdInput.trim()) return;
+    const mid = zeroPadValue(resolveMatchId(matchIdInput), 32);
     setMatchActionLoading(true);
     setMsg(null);
     try {
       const res = await fetch(`${GAME_SERVER_URL}/match/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchId: mid }),
+        body: JSON.stringify({ matchId: mid, escrowAddress: deployed.escrow }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (data.error === "match already running") {
+          setMsg({ type: "success", text: "Match already started. Loading…" });
+          await loadMatchState();
+          setMatchActionLoading(false);
+          return;
+        }
         const reason = data.reason ? ` (${data.reason})` : "";
         let text = data.error ?? `Start failed (${res.status})`;
         if (data.reason === "pending_entries") {
-          text += ". Ensure the game server .env has ESCROW_ADDRESS set to the same escrow as this page: " + (deployed?.escrow?.slice(0, 10) + "…") + ".";
+          text += ". Match must be Escrowed (4/4 entered). Refresh Match status above; if it shows 4/4, the game server may have started before deploy — restart dev:all or click Reset then try again.";
         } else {
           text += reason;
         }
@@ -154,11 +293,16 @@ export default function App() {
 
   const submitMatchAction = async () => {
     if (!matchIdInput.trim() || typeof playerIndex !== "number" || matchState == null) return;
-    const mid = resolveMatchId(matchIdInput);
-    const m0 = parseInt(matchMove0.trim(), 10);
-    const m1 = parseInt(matchMove1.trim(), 10);
-    const m2 = parseInt(matchMove2.trim(), 10);
-    if ([m0, m1, m2].some((n) => isNaN(n) || n < 0 || n > 48)) {
+    const mid = zeroPadValue(resolveMatchId(matchIdInput), 32);
+    const cur = matchState.tokenPositions?.[playerIndex];
+    const fallback = (i: number) => (cur != null && cur[i] >= 0 && cur[i] <= 48 ? cur[i] : i);
+    let m0 = parseInt(matchMove0.trim(), 10);
+    let m1 = parseInt(matchMove1.trim(), 10);
+    let m2 = parseInt(matchMove2.trim(), 10);
+    if (isNaN(m0) || m0 < 0 || m0 > 48) m0 = fallback(0);
+    if (isNaN(m1) || m1 < 0 || m1 > 48) m1 = fallback(1);
+    if (isNaN(m2) || m2 < 0 || m2 > 48) m2 = fallback(2);
+    if ([m0, m1, m2].some((n) => n < 0 || n > 48)) {
       setMsg({ type: "error", text: "Moves must be tile indices 0–48" });
       return;
     }
@@ -237,36 +381,177 @@ export default function App() {
     }
   };
 
-  const createMatchWithId = async (matchIdHex: string) => {
-    if (!provider || !address || !deployed) return;
+  /** Join queue with all 4 participant slots (for single-screen local testing). */
+  const joinQueueAll = async () => {
+    const allSet = participantAddresses.every((a) => a != null && a.startsWith("0x"));
+    if (!allSet) {
+      setMsg({ type: "error", text: "Set all 4 participants above (use 'Set to current account' for each slot)." });
+      return;
+    }
+    const normalized = participantAddresses.map((a) => String(a).toLowerCase());
+    if (new Set(normalized).size !== 4) {
+      setMsg({
+        type: "error",
+        text: "All 4 participant slots must be different wallets. Switch MetaMask account and set each slot once (P1–P4).",
+      });
+      return;
+    }
+    setQueueLoading(true);
     setMsg(null);
-    setTxPending(true);
+    setMatchFound(null);
+    setInQueue(false);
+    const generationWhenStarted = queuePollGenerationRef.current;
     try {
-      const signer = await provider.getSigner();
-      const escrow = new Contract(deployed.escrow, ESCROW_ABI, signer);
-      const tx = await escrow.createMatch(matchIdHex, deployed.entryAmount);
-      const receipt = await tx.wait();
-      const hash = receipt?.hash ?? tx.hash;
-      setMsg({ type: "success", text: hash ? `Match created on-chain. Tx: ${String(hash).slice(0, 18)}…` : "Match created." });
+      let matchFromJoin: { matchId: string; entry_deadline: number } | null = null;
+      for (let i = 0; i < 4; i++) {
+        const wallet = participantAddresses[i]!;
+        const res = await fetch(`${GAME_SERVER_URL}/queue/join`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tier: queueTier, wallet }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === "match_found" && data.matchId) {
+          matchFromJoin = { matchId: data.matchId, entry_deadline: data.entry_deadline };
+        }
+        if (!res.ok) {
+          setMsg({ type: "error", text: data.error || `Join P${i + 1} failed` });
+          setQueueLoading(false);
+          return;
+        }
+      }
+      if (generationWhenStarted !== queuePollGenerationRef.current) return;
+      if (matchFromJoin) {
+        setMatchFound(matchFromJoin);
+        setMsg({ type: "success", text: "Match found! Proceed to Enter below." });
+      } else {
+        setMsg({
+          type: "success",
+          text: "All 4 joined. Polling for match… If this does not resolve in a few seconds, click Reset everything and re-join.",
+        });
+        setInQueue(true);
+      }
     } catch (e) {
-      setMsg({ type: "error", text: decodeRevertReason(e) });
+      setMsg({ type: "error", text: (e as Error)?.message ?? "Game server unreachable." });
     } finally {
-      setTxPending(false);
+      setQueueLoading(false);
     }
   };
 
-  const createMatch = async () => {
-    if (!provider || !address || !deployed) return;
+  /** Enter match as the participant in the given slot (current MetaMask must match that slot). */
+  const enterMatchAs = async (slot: number) => {
+    if (slot < 0 || slot > 3 || !address || !participantAddresses[slot]) return;
+    if (address.toLowerCase() !== participantAddresses[slot]!.toLowerCase()) {
+      setMsg({ type: "error", text: `Switch MetaMask to Player ${slot + 1} (${participantAddresses[slot]!.slice(0, 6)}…${participantAddresses[slot]!.slice(-4)}) then click Enter as P${slot + 1}.` });
+      return;
+    }
+    await enterMatch();
+  };
+
+  const [playKey, setPlayKey] = useState(0);
+  /** Clear and reset everything for a fresh start: server queue/assignments, all UI state, participants, reload addresses. */
+  const resetEverything = async () => {
     setMsg(null);
+    queuePollGenerationRef.current += 1;
+    let queueResetOk = true;
+    try {
+      const res = await fetch(`${GAME_SERVER_URL}/queue/reset`, { method: "POST" });
+      if (!res.ok) queueResetOk = false;
+    } catch {
+      queueResetOk = false;
+    }
+    setMatchFound(null);
+    setInQueue(false);
+    setMatchIdInput("");
+    setMatchInfo("");
+    setMatchState(null);
+    setPlayerIndex(null);
+    setParticipantAddressesState([null, null, null, null]);
+    try {
+      sessionStorage.removeItem(PARTICIPANTS_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    setQueueTier("bronze-10");
+    setPlacementInput("0,1,2,3");
+    setMatchMove0("");
+    setMatchMove1("");
+    setMatchMove2("");
+    await loadDeployed();
+    refreshEscrowCheck();
+    setMsg({
+      type: queueResetOk ? "success" : "error",
+      text: queueResetOk
+        ? "Everything cleared. Start fresh from the Lobby."
+        : "UI reset completed, but game server queue reset failed. Ensure game server is running on :3000, then click Reset again.",
+    });
+    setPlayKey((k) => k + 1);
+  };
+
+  /** Check if match already exists on-chain (so we can skip tx and show guidance). */
+  const matchExistsOnChain = async (matchIdBytes32: string): Promise<boolean> => {
+    if (!provider || !deployed?.escrow) return false;
+    try {
+      const escrow = new Contract(deployed.escrow, ESCROW_ABI, provider);
+      const m = await escrow.matches(matchIdBytes32);
+      const row = m as unknown as Record<string, unknown> & Array<unknown>;
+      const rawDeadline = row.entryDeadline ?? row[7] ?? row[8] ?? row[11] ?? 0n;
+      const deadline =
+        typeof rawDeadline === "bigint"
+          ? Number(rawDeadline)
+          : typeof rawDeadline === "number"
+          ? rawDeadline
+          : Number(rawDeadline ?? 0);
+      return Number.isFinite(deadline) && deadline > 0;
+    } catch {
+      return false;
+    }
+  };
+
+  const createMatchWithId = async (matchIdHex: string) => {
+    setMsg(null);
+    let effectiveProvider = provider;
+    let effectiveAddress = address;
+    if (!effectiveProvider || !effectiveAddress) {
+      const refreshed = await refreshAccount();
+      effectiveProvider = refreshed.provider ?? effectiveProvider;
+      effectiveAddress = refreshed.address ?? effectiveAddress;
+    }
+    if (!effectiveProvider || !effectiveAddress) {
+      setMsg({
+        type: "error",
+        text: "Wallet not detected. Use Connect wallet in the header, or switch to the escrow owner in MetaMask and try again.",
+      });
+      return;
+    }
+    if (!deployed) {
+      setMsg({ type: "error", text: "Contract addresses not loaded. Click Reload addresses or refresh the page." });
+      return;
+    }
+    const matchIdBytes32 = zeroPadValue(resolveMatchId(matchIdHex), 32);
     setTxPending(true);
     try {
-      const signer = await provider.getSigner();
+      const exists = await matchExistsOnChain(matchIdBytes32);
+      if (exists) {
+        setEscrowHasCode(true);
+        contractConfirmedRef.current = true;
+        setMsg({ type: "success", text: "Match already exists on-chain. Click Refresh above to see status, then have each player use Enter match." });
+        fetchMatch().catch(() => {});
+        return;
+      }
+      const signer = await effectiveProvider.getSigner();
       const escrow = new Contract(deployed.escrow, ESCROW_ABI, signer);
-      const mid = matchIdToBytes32(matchIdInput);
-      const tx = await escrow.createMatch(mid, deployed.entryAmount);
+      const tx = await escrow.createMatch(matchIdBytes32, deployed.entryAmount);
       const receipt = await tx.wait();
       const hash = receipt?.hash ?? tx.hash;
-      setMsg({ type: "success", text: hash ? `Match created. Tx: ${String(hash).slice(0, 18)}…` : "Match created." });
+      setMsg({ type: "success", text: hash ? `Match created on-chain. Tx: ${String(hash).slice(0, 18)}…` : "Match created." });
+      setEscrowHasCode(true);
+      contractConfirmedRef.current = true;
+      setMatchInfo("Match created. Refreshing…");
+      fetchMatch().catch(() => {});
+      setTimeout(() => fetchMatch(), 2000);
+      setTimeout(() => fetchMatch(), 4000);
+      setTimeout(() => fetchMatch(), 6000);
     } catch (e) {
       setMsg({ type: "error", text: decodeRevertReason(e) });
     } finally {
@@ -282,7 +567,7 @@ export default function App() {
       const signer = await provider.getSigner();
       const usdc = new Contract(deployed.usdc, ERC20_ABI, signer);
       const escrow = new Contract(deployed.escrow, ESCROW_ABI, signer);
-      const mid = resolveMatchId(matchIdInput);
+      const mid = zeroPadValue(resolveMatchId(matchIdInput), 32);
       const amount = BigInt(deployed.entryAmount);
       const txApprove = await usdc.approve(deployed.escrow, amount);
       await txApprove.wait();
@@ -290,6 +575,7 @@ export default function App() {
       const receipt = await txEntry.wait();
       const hash = receipt?.hash ?? txEntry.hash;
       setMsg({ type: "success", text: hash ? `Entry submitted. Tx: ${String(hash).slice(0, 18)}…` : "Entry submitted." });
+      contractConfirmedRef.current = true;
       refreshBalance();
     } catch (e) {
       setMsg({ type: "error", text: decodeRevertReason(e) });
@@ -298,30 +584,110 @@ export default function App() {
     }
   };
 
-  const fetchMatch = async () => {
-    if (!provider || !deployed) return;
+  /** Pass matchId and escrowAddress from caller (Play) so we always use the values the UI shows. */
+  const fetchMatch = async (overrides?: { matchId?: string; escrowAddress?: string }) => {
+    const trimmed = overrides?.matchId ?? matchIdInput.trim();
+    if (!trimmed) return;
+    const escrowAddr = (overrides?.escrowAddress ?? deployed?.escrow ?? "").trim().toLowerCase();
     setMsg(null);
-    setMatchInfo("");
     setFetchMatchLoading(true);
-    try {
-      const escrow = new Contract(deployed.escrow, ESCROW_ABI, provider);
-      const mid = resolveMatchId(matchIdInput);
-      const m = await escrow.matches(mid);
-      if (m.entryDeadline === 0n || (typeof m.entryDeadline === "number" && m.entryDeadline === 0)) {
-        setMatchInfo("No match at this seed. Create a match first or ensure you're on Localhost 8545 and haven't run deploy:localhost again.");
+    const mid = resolveMatchId(trimmed);
+    const midNorm = normalizeMatchIdHex(trimmed);
+
+    // When wallet is connected: read from chain using same bytes32 as createMatch.
+    if (provider && escrowAddr) {
+      const delays = [0, 1000, 2500];
+      for (const delay of delays) {
+        if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        const fromChain = await fetchMatchFromChain(provider, escrowAddr, mid);
+        if (fromChain) {
+          setMatchInfo(fromChain);
+          setFetchMatchLoading(false);
+          return;
+        }
+      }
+      // For Localhost: try reading from 8545 directly (works even if MetaMask is on wrong network).
+      if (deployed?.chainId === 31337) {
+        try {
+          const localProvider = new JsonRpcProvider("http://127.0.0.1:8545");
+          const fromLocal = await fetchMatchFromChain(localProvider, escrowAddr, mid);
+          if (fromLocal) {
+            setMatchInfo(fromLocal + " (read from Localhost 8545)");
+            setFetchMatchLoading(false);
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      // Fallback through game server RPC to avoid false wallet-network hints.
+      try {
+        const escrowParam = `&escrowAddress=${encodeURIComponent(escrowAddr)}`;
+        const res = await fetch(
+          `${GAME_SERVER_URL}/match/status?matchId=${encodeURIComponent(mid)}${escrowParam}`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.statusName != null) {
+          setMatchInfo(
+            `Status: ${data.statusName} | Entries: ${data.entriesReceived ?? 0}/4 | Pool: ${data.poolAmount ?? "0"} USDC (read via game server RPC)`
+          );
+          setFetchMatchLoading(false);
+          return;
+        }
+      } catch {
+        // ignore and show guidance below
+      }
+
+      const isQueuedUncreatedMatch =
+        !!matchFound && matchFound.matchId.toLowerCase() === trimmed.toLowerCase();
+      if (isQueuedUncreatedMatch) {
+        setMatchInfo("Match ID is from queue but not created on-chain yet. Switch MetaMask to escrow owner and click Create match on-chain.");
+        setFetchMatchLoading(false);
         return;
       }
-      const status = STATUS_NAMES[Number(m.status)] ?? "?";
-      setMatchInfo(
-        `Status: ${status} | Entries: ${m.entriesReceived}/4 | Pool: ${formatUnits(m.poolAmount, 6)} USDC`
-      );
-    } catch (e) {
-      const err = e as Error & { code?: string; value?: string; reason?: string };
-      const friendly = err.code === "BAD_DATA" && (err.value === "0x" || (err.message && String(err.message).includes("could not decode result data")))
-        ? "No contract at this escrow address. Run deploy:localhost once (with the node running), then refresh this page."
-        : decodeRevertReason(e);
-      const hint = chainId !== deployed.chainId ? " Switch MetaMask to Localhost 8545 (31337)." : "";
-      setMatchInfo(`${friendly}${hint}`);
+
+      let walletChainId = chainId;
+      if (walletChainId == null) {
+        try {
+          walletChainId = Number((await provider.getNetwork()).chainId);
+        } catch {
+          walletChainId = null;
+        }
+      }
+      if (deployed?.chainId === 31337) {
+        if (walletChainId != null && walletChainId !== 31337) {
+          setMatchInfo("Match not found on this wallet network. Switch MetaMask to Localhost 8545 (chain 31337), then refresh.");
+        } else {
+          setMatchInfo("Match not found on current escrow deployment. If this ID came from queue, create it on-chain first with the escrow owner. If you already created it, reload addresses and reset queue to clear stale deployment data.");
+        }
+      } else {
+        setMatchInfo("Match not found on chain. Ensure your wallet is on the same network and escrow deployment as this app.");
+      }
+      setFetchMatchLoading(false);
+      return;
+    }
+
+    // No wallet: fallback to game server (e.g. before connect).
+    try {
+      const escrowParam = escrowAddr ? `&escrowAddress=${encodeURIComponent(escrowAddr)}` : "";
+      const res = await fetch(`${GAME_SERVER_URL}/match/status?matchId=${encodeURIComponent(midNorm)}${escrowParam}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.statusName != null) {
+        setMatchInfo(
+          `Status: ${data.statusName} | Entries: ${data.entriesReceived ?? 0}/4 | Pool: ${data.poolAmount ?? "0"} USDC`
+        );
+        setFetchMatchLoading(false);
+        return;
+      }
+      if (res.status === 404) {
+        setMatchInfo("No match at this seed. Connect your wallet and create a match, or ensure the game server RPC matches your network.");
+      } else if (res.status === 503) {
+        setMatchInfo("Game server has no escrow. Run deploy:localhost and ensure dev:all or game-server is running.");
+      } else {
+        setMatchInfo(data.error ?? "Could not load match status.");
+      }
+    } catch {
+      setMatchInfo("Could not reach game server. Start it with: npm run game-server (or npm run dev:all).");
     } finally {
       setFetchMatchLoading(false);
     }
@@ -332,7 +698,7 @@ export default function App() {
     setMsg(null);
     setTxPending(true);
     try {
-      const mid = resolveMatchId(matchIdInput);
+      const mid = zeroPadValue(resolveMatchId(matchIdInput), 32);
       const placement = placementInput.split(",").map((s) => parseInt(s.trim(), 10)) as [number, number, number, number];
       if (placement.length !== 4 || placement.some((p) => p < 0 || p > 3)) {
         throw new Error("Placement must be four numbers 0–3 (e.g. 0,1,2,3)");
@@ -371,7 +737,9 @@ export default function App() {
     deployed,
     chainId,
     escrowHasCode,
+    refreshEscrowCheck,
     signerMatchesContract,
+    escrowOwner,
     matchIdInput,
     setMatchIdInput,
     placementInput,
@@ -406,19 +774,24 @@ export default function App() {
     startMatchThenLoad,
     submitMatchAction,
     createMatchWithId,
-    createMatch,
     enterMatch,
     fetchMatch,
     submitResult,
+    loadDeployed,
+    resetEverything,
+    participantAddresses,
+    setParticipant,
+    joinQueueAll,
+    enterMatchAs,
   };
 
   return (
     <BrowserRouter>
-      <Layout>
+      <Layout resetEverything={resetEverything}>
         <ErrorBoundary>
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/play" element={<Play {...playProps} />} />
+            <Route path="/play" element={<Play key={playKey} {...playProps} />} />
             <Route path="/rewards" element={<Rewards />} />
             <Route path="/wallet" element={<Wallet />} />
             <Route path="/account" element={<Account />} />

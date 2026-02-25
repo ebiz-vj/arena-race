@@ -24,7 +24,7 @@ type WalletContextValue = {
   usdcBalance: string;
   connectWallet: () => Promise<void>;
   disconnectWallet: () => void;
-  refreshAccount: () => Promise<void>;
+  refreshAccount: () => Promise<{ address: string | null; provider: BrowserProvider | null }>;
   refreshBalance: () => void;
   loadDeployed: () => Promise<void>;
   connectLoading: boolean;
@@ -86,8 +86,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const ethereum = (window as unknown as {
       ethereum?: {
-        on: (e: string, h: (accounts: string[]) => void) => void;
-        removeListener?: (e: string, h: (accounts: string[]) => void) => void;
+        on: (e: string, h: (...args: unknown[]) => void) => void;
+        removeListener?: (e: string, h: (...args: unknown[]) => void) => void;
       };
     }).ethereum;
     if (!ethereum?.on) return;
@@ -100,13 +100,30 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
       setErrorMessage(null);
     };
+    const handleChainChanged = (chainIdHex: string) => {
+      const parsed = typeof chainIdHex === "string" ? parseInt(chainIdHex, 16) : NaN;
+      const nextChainId = Number.isFinite(parsed) ? parsed : null;
+      setChainId(nextChainId);
+      setProvider(new BrowserProvider(ethereum as import("ethers").Eip1193Provider));
+      if (nextChainId != null && deployed && nextChainId !== deployed.chainId) {
+        setErrorMessage(
+          `Wrong network. Switch to Localhost 8545 (chain id ${deployed.chainId}). You are on chain ${nextChainId}.`
+        );
+      } else {
+        setErrorMessage((prev) =>
+          prev?.startsWith("Wrong network.") ? null : prev
+        );
+      }
+    };
     ethereum.on("accountsChanged", handleAccountsChanged);
+    ethereum.on("chainChanged", handleChainChanged);
     return () => {
       if (ethereum.removeListener) {
         ethereum.removeListener("accountsChanged", handleAccountsChanged);
+        ethereum.removeListener("chainChanged", handleChainChanged);
       }
     };
-  }, []);
+  }, [deployed]);
 
   const connectWallet = useCallback(async () => {
     setErrorMessage(null);
@@ -157,7 +174,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setErrorMessage(null);
   }, []);
 
-  const refreshAccount = useCallback(async () => {
+  const refreshAccount = useCallback(async (): Promise<{
+    address: string | null;
+    provider: BrowserProvider | null;
+  }> => {
     const win = window as unknown as {
       ethereum?: {
         request: (args: { method: string }) => Promise<string[]>;
@@ -165,7 +185,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       };
     };
     const ethereum = win.ethereum;
-    if (!ethereum?.request) return;
+    if (!ethereum?.request) {
+      return { address: null, provider: null };
+    }
     setErrorMessage(null);
     try {
       const accounts = (await ethereum.request({
@@ -177,14 +199,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           selected && accounts.some((a) => a.toLowerCase() === selected)
             ? accounts.find((a) => a.toLowerCase() === selected)!
             : accounts[0];
+        const p = new BrowserProvider(ethereum as import("ethers").Eip1193Provider);
         setAddress(newAddress);
-        setProvider(new BrowserProvider(ethereum as import("ethers").Eip1193Provider));
-      } else {
-        setAddress(null);
-        setProvider(null);
+        setProvider(p);
+        return { address: newAddress, provider: p };
       }
+      setAddress(null);
+      setProvider(null);
+      return { address: null, provider: null };
     } catch (e) {
       setErrorMessage((e as Error)?.message ?? "Could not refresh account");
+      return { address: null, provider: null };
     }
   }, []);
 

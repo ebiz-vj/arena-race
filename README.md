@@ -243,6 +243,34 @@ npm run dev
 
 **MetaMask vs app balance:** On Localhost, MetaMask may not refresh custom token (USDC) balances. The balance shown on **http://localhost:5173** is read directly from the chain and is correct; switch accounts there to see each account’s USDC after payouts.
 
+### Single MetaMask (4 players) quick flow
+
+Use one browser and one MetaMask extension by switching account between actions:
+
+1. Import the first 4 Hardhat accounts into MetaMask (from `npm run node:localhost` output).
+2. In the webapp Play page, set `Player 1..4` slots by switching account and clicking **Set to current** once per slot.
+3. Ensure all 4 slots are unique addresses, then click **Join all 4 to queue**.
+4. On Enter step:
+   - Switch to deployer/owner account -> **Create match on-chain**.
+   - Switch account to each player in order -> **Enter as P1/P2/P3/P4**.
+5. When status shows **Escrowed (4/4)**, start the arena and submit moves by switching account each turn.
+6. After match end, submit result and verify payouts by switching account in the header wallet display.
+
+### Local troubleshooting (most common)
+
+- **Queue match ID shows "not found"**
+  - This is expected until escrow owner clicks **Create match on-chain** for that queue match ID.
+  - After create tx confirms, **Refresh** should show `PendingEntries` or `Escrowed`.
+- **"Match not found on chain"**
+  - Usually means stale match id or stale `deployed-local.json` after redeploy.
+  - Click **Reload addresses**, then **Reset everything**, re-queue and recreate match.
+- **"Switch MetaMask to localhost 8545" even when services are up**
+  - Confirm wallet chain id is `31337` (Localhost 8545).
+  - If already on 31337, the issue is typically old deployment data, not network reachability.
+- **Queue stuck after "Join all 4"**
+  - Verify P1-P4 are all different addresses.
+  - Reset queue state and join again.
+
 ---
 
 ## Architecture (short)

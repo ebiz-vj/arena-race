@@ -4,9 +4,11 @@ import "./Layout.css";
 
 type LayoutProps = {
   children: React.ReactNode;
+  /** Reload addresses and clear match/queue; navigates to Play lobby. May be async. */
+  resetEverything?: () => void | Promise<void>;
 };
 
-export default function Layout({ children }: LayoutProps) {
+export default function Layout({ children, resetEverything }: LayoutProps) {
   const {
     address,
     usdcBalance,
@@ -50,6 +52,19 @@ export default function Layout({ children }: LayoutProps) {
       <NavLink to="/account" className="layout-account-link">
         Account
       </NavLink>
+      {resetEverything && (
+        <button
+          type="button"
+          onClick={async () => {
+            await resetEverything();
+            navigate("/play");
+          }}
+          className="layout-reset-btn"
+          title="Clear everything and start fresh: queue, match state, participants; reload addresses; return to Lobby"
+        >
+          Reset
+        </button>
+      )}
       <button
         type="button"
         onClick={() => {

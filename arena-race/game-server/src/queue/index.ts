@@ -3,5 +3,7 @@ export {
   getAssignment,
   setAssignmentsForMatch,
   clearAssignment,
+  clearExpiredAssignments,
+  clearAllAssignments,
   type MatchAssignment,
 } from "./matchAssignments";

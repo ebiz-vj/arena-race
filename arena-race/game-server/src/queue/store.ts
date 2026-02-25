@@ -33,6 +33,11 @@ export class InMemoryQueueStore {
     return [...(this.queues.get(tier) ?? [])];
   }
 
+  /** Clear all queues (for Reset everything in local dev). */
+  clearAll(): void {
+    this.queues = new Map(TIERS.map((t) => [t, []]));
+  }
+
   removeAll(tier: Tier, playerIds: string[]): void {
     const set = new Set(playerIds);
     const list = this.queues.get(tier)!;
