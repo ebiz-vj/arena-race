@@ -91,6 +91,9 @@ export default function Layout({ children, resetEverything }: LayoutProps) {
           <NavLink to="/play" className={({ isActive }) => (isActive ? "active" : "")}>
             Play
           </NavLink>
+          <NavLink to="/simulator" className={({ isActive }) => (isActive ? "active" : "")}>
+            Game Simulator
+          </NavLink>
           <NavLink to="/rewards" className={({ isActive }) => (isActive ? "active" : "")}>
             Rewards
           </NavLink>

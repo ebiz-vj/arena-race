@@ -5,7 +5,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
  */
 const movement_1 = require("./movement");
 describe("movement", () => {
-    it("applies moves in player order; first mover wins tile", () => {
+    it("applies submitted moves for each token, including shared destination tiles", () => {
         const positions = [
             [0, 1, 2],
             [3, 4, 5],
@@ -20,7 +20,7 @@ describe("movement", () => {
         ];
         const next = (0, movement_1.applyMovement)(positions, actions);
         expect(next[0][0]).toBe(20);
-        expect(next[1][0]).toBe(3);
+        expect(next[1][0]).toBe(20);
         expect(next[2][0]).toBe(6);
         expect(next[3][0]).toBe(9);
     });

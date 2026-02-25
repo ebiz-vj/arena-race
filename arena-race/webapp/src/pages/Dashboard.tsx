@@ -41,6 +41,9 @@ export default function Dashboard() {
         <Link to="/play" className="quick-action-card journey-cta-dashboard" style={{ marginTop: "var(--space-xl)", padding: "var(--space-lg) var(--space-2xl)", fontSize: "1.1rem" }}>
           Enter the Arena — Start your journey →
         </Link>
+        <Link to="/simulator" className="quick-action-card" style={{ marginTop: "var(--space-md)" }}>
+          Open Game Simulator
+        </Link>
       </section>
 
       {!address ? (
@@ -95,6 +98,9 @@ export default function Dashboard() {
               </Link>
               <Link to="/rewards" className="quick-action-card">
                 🎁 Rewards
+              </Link>
+              <Link to="/simulator" className="quick-action-card">
+                🧪 Game Simulator
               </Link>
               <Link to="/wallet" className="quick-action-card">
                 💳 Wallet

@@ -71,9 +71,10 @@ export type Deployed = { chainId: number; usdc: string; escrow: string; entryAmo
 
 export type MatchState = {
   turnIndex: number;
-  tokenPositions: number[][][];
+  tokenPositions: number[][];
   scores: { total: number }[];
   turnDeadlineMs?: number;
+  submittedPlayers?: number[];
 };
 
 export type PlayPageProps = {
@@ -118,7 +119,8 @@ export type PlayPageProps = {
   leaveQueue: () => void;
   loadMatchState: () => void;
   startMatchThenLoad: () => void;
-  submitMatchAction: () => void;
+  submitMatchAction: (opts?: { playerIndexOverride?: number; moves?: [number, number, number] }) => Promise<boolean>;
+  resolveTurnNow: () => Promise<boolean>;
   createMatchWithId: (matchIdHex: string) => void;
   enterMatch: () => void;
   fetchMatch: (overrides?: { matchId?: string; escrowAddress?: string }) => void;
@@ -150,27 +152,35 @@ function resolveMatchId(id: string): string {
 
 type JourneyStep = "lobby" | "enter" | "arena" | "results";
 
+const TRAP_TILES = [12, 24, 36] as const;
+const START_LANES: [number, number, number][] = [
+  [42, 43, 44], // P0
+  [45, 46, 47], // P1
+  [35, 36, 37], // P2
+  [38, 39, 40], // P3
+];
+
 /** Animated "How it works" frames: each frame is [P0, P1, P2, P3] token positions. */
 const EXAMPLE_FRAMES: { positions: [number, number, number][]; label: string }[] = [
   {
-    positions: [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]],
-    label: "Start — all tokens on the grid",
+    positions: [[42, 43, 44], [45, 46, 47], [35, 36, 37], [38, 39, 40]],
+    label: "Start — each player begins in a reserved lane",
   },
   {
-    positions: [[7, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]],
-    label: "P0 moves token 0 → tile 7",
+    positions: [[35, 43, 44], [45, 46, 47], [35, 36, 37], [38, 39, 40]],
+    label: "P0 moves token 0 upward by one row",
   },
   {
-    positions: [[7, 1, 2], [10, 4, 5], [6, 7, 8], [9, 10, 11]],
-    label: "P1 moves token 0 → tile 10",
+    positions: [[35, 43, 44], [38, 46, 47], [35, 36, 37], [38, 39, 40]],
+    label: "P1 moves token 0 upward by one row",
   },
   {
-    positions: [[7, 8, 2], [10, 4, 5], [6, 7, 8], [9, 10, 11]],
-    label: "P0 moves token 1 → tile 8",
+    positions: [[35, 36, 44], [38, 46, 47], [35, 36, 37], [38, 39, 40]],
+    label: "P0 moves token 1 upward by one row",
   },
   {
-    positions: [[7, 8, 14], [10, 4, 5], [6, 7, 8], [9, 10, 11]],
-    label: "P0 moves token 2 → tile 14",
+    positions: [[35, 36, 30], [38, 46, 47], [35, 36, 37], [38, 39, 40]],
+    label: "P0 moves token 2 upward by two rows",
   },
 ];
 const EXAMPLE_FRAME_MS = 2200;
@@ -181,6 +191,26 @@ const STEPS: { key: JourneyStep; label: string }[] = [
   { key: "arena", label: "Arena" },
   { key: "results", label: "Results" },
 ];
+
+function shortAddress(addr: string): string {
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+function parseMatchInfoText(text: string): { statusName: string | null; entriesReceived: number | null } {
+  const statusMatch = text.match(/Status:\s*([A-Za-z?]+)/);
+  const entriesMatch = text.match(/Entries:\s*(\d)\s*\/\s*4/);
+  return {
+    statusName: statusMatch?.[1] ?? null,
+    entriesReceived: entriesMatch ? Number(entriesMatch[1]) : null,
+  };
+}
+
+type ResolvedMove = {
+  player: number;
+  token: number;
+  from: number;
+  to: number;
+};
 
 export default function Play(props: PlayPageProps) {
   const {
@@ -224,6 +254,7 @@ export default function Play(props: PlayPageProps) {
     loadMatchState,
     startMatchThenLoad,
     submitMatchAction,
+    resolveTurnNow,
     createMatchWithId,
     enterMatch,
   fetchMatch,
@@ -237,18 +268,37 @@ export default function Play(props: PlayPageProps) {
   } = props;
 
   const [step, setStep] = useState<JourneyStep>("lobby");
-  const [, setTick] = useState(0);
   const [exampleFrame, setExampleFrame] = useState(0);
+  const [showExampleBoard, setShowExampleBoard] = useState(false);
+  const [controlMode, setControlMode] = useState<"manual" | "wallet">("manual");
+  const [selectedControlPlayer, setSelectedControlPlayer] = useState<number>(0);
+  const [autoSubmitting, setAutoSubmitting] = useState(false);
+  const [recentResolvedTurn, setRecentResolvedTurn] = useState<number | null>(null);
+  const [recentResolvedMoves, setRecentResolvedMoves] = useState<ResolvedMove[]>([]);
+  const [lastSubmitInfo, setLastSubmitInfo] = useState("");
   const [selectedTokenForMove, setSelectedTokenForMove] = useState<0 | 1 | 2>(0);
   const [dragOverTile, setDragOverTile] = useState<number | null>(null);
   const lastPrefillTurnRef = useRef<number | null>(null);
+  const previousMatchStateRef = useRef<{ turnIndex: number; positions: number[][] } | null>(null);
+  const clearResolvedMovesTimerRef = useRef<number | null>(null);
   const DRAG_TOKEN_KEY = "arena-race/tokenIndex";
+  const walletLinkedPlayerIndex = typeof playerIndex === "number" ? playerIndex : null;
+  const effectivePlayerIndex =
+    controlMode === "manual" ? selectedControlPlayer : walletLinkedPlayerIndex;
+  const canControlBoard = effectivePlayerIndex != null;
+
+  useEffect(() => {
+    if (controlMode === "wallet" && walletLinkedPlayerIndex != null) {
+      setSelectedControlPlayer(walletLinkedPlayerIndex);
+    }
+  }, [controlMode, walletLinkedPlayerIndex]);
+
   // Pre-fill move inputs with current positions when turn changes (so "stay put" is default)
   useEffect(() => {
-    if (step !== "arena" || !matchState || playerIndex == null) return;
+    if (step !== "arena" || !matchState || effectivePlayerIndex == null) return;
     const turn = matchState.turnIndex;
     if (lastPrefillTurnRef.current !== turn) {
-      const pos = matchState.tokenPositions?.[playerIndex];
+      const pos = matchState.tokenPositions?.[effectivePlayerIndex];
       if (pos?.length === 3) {
         setMatchMove0(String(pos[0]));
         setMatchMove1(String(pos[1]));
@@ -256,21 +306,62 @@ export default function Play(props: PlayPageProps) {
         lastPrefillTurnRef.current = turn;
       }
     }
-  }, [step, matchState, playerIndex, matchState?.turnIndex, setMatchMove0, setMatchMove1, setMatchMove2]);
+  }, [step, matchState, effectivePlayerIndex, matchState?.turnIndex, setMatchMove0, setMatchMove1, setMatchMove2]);
+
+  useEffect(() => {
+    if (!matchState) return;
+    const nextPositions = matchState.tokenPositions ?? [];
+    const snapshot = {
+      turnIndex: matchState.turnIndex,
+      positions: Array.from({ length: 4 }, (_, p) => [
+        Number(nextPositions?.[p]?.[0] ?? 0),
+        Number(nextPositions?.[p]?.[1] ?? 1),
+        Number(nextPositions?.[p]?.[2] ?? 2),
+      ]),
+    };
+
+    const prev = previousMatchStateRef.current;
+    if (prev && snapshot.turnIndex > prev.turnIndex) {
+      const diffs: ResolvedMove[] = [];
+      for (let p = 0; p < 4; p++) {
+        for (let t = 0; t < 3; t++) {
+          const from = Number(prev.positions?.[p]?.[t]);
+          const to = Number(snapshot.positions?.[p]?.[t]);
+          if (Number.isFinite(from) && Number.isFinite(to) && from !== to) {
+            diffs.push({ player: p, token: t, from, to });
+          }
+        }
+      }
+      setRecentResolvedTurn(prev.turnIndex);
+      setRecentResolvedMoves(diffs);
+      setLastSubmitInfo("");
+      if (clearResolvedMovesTimerRef.current != null) {
+        window.clearTimeout(clearResolvedMovesTimerRef.current);
+      }
+      clearResolvedMovesTimerRef.current = window.setTimeout(() => {
+        setRecentResolvedTurn(null);
+        setRecentResolvedMoves([]);
+      }, 4500);
+    }
+    previousMatchStateRef.current = snapshot;
+  }, [matchState]);
+
+  useEffect(() => {
+    return () => {
+      if (clearResolvedMovesTimerRef.current != null) {
+        window.clearTimeout(clearResolvedMovesTimerRef.current);
+      }
+    };
+  }, []);
+
   // "How it works" board: cycle through example frames for video-like demo
   useEffect(() => {
-    if (step !== "arena") return;
+    if (step !== "arena" || !showExampleBoard) return;
     const id = setInterval(() => {
       setExampleFrame((f) => (f + 1) % EXAMPLE_FRAMES.length);
     }, EXAMPLE_FRAME_MS);
     return () => clearInterval(id);
-  }, [step]);
-  // Live countdown in Arena: re-render every second so timer updates
-  useEffect(() => {
-    if (step !== "arena" || !matchState?.turnDeadlineMs) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [step, matchState?.turnDeadlineMs]);
+  }, [step, showExampleBoard]);
 
   useEffect(() => {
     document.title = "Play – Arena Race";
@@ -350,6 +441,121 @@ export default function Play(props: PlayPageProps) {
     }
   };
 
+  const clampTile = (value: number): number =>
+    Math.max(0, Math.min(48, Math.trunc(value)));
+
+  const proposeAutoMoves = (player: number): [number, number, number] => {
+    const current = matchState?.tokenPositions?.[player] ?? [0, 1, 2];
+    const proposeOne = (tile: number) => {
+      if (!Number.isFinite(tile) || tile < 0) return -1;
+      const base = Number.isFinite(tile) ? tile : 0;
+      const row = Math.floor(base / 7);
+      const col = base % 7;
+      const up = 1 + Math.floor(Math.random() * 2); // move 1-2 rows toward finish
+      const lateral = [-1, 0, 1][Math.floor(Math.random() * 3)];
+      const targetRow = Math.max(0, row - up);
+      const targetCol = Math.max(0, Math.min(6, col + lateral));
+      return clampTile(targetRow * 7 + targetCol);
+    };
+    return [
+      proposeOne(Number(current[0] ?? 0)),
+      proposeOne(Number(current[1] ?? 1)),
+      proposeOne(Number(current[2] ?? 2)),
+    ];
+  };
+
+  const submitControlledMove = async () => {
+    if (effectivePlayerIndex == null) {
+      setMsg({
+        type: "error",
+        text: "Select a controller player first (P0–P3), then submit move.",
+      });
+      return;
+    }
+    const ok = await submitMatchAction({ playerIndexOverride: effectivePlayerIndex });
+    if (ok) {
+      setLastSubmitInfo(`P${effectivePlayerIndex} move submitted.`);
+    }
+  };
+
+  const submitAutoMoves = async (mode: "others" | "all") => {
+    if (!matchState || !matchIdInput.trim()) {
+      setMsg({ type: "error", text: "Start the match first so turn state is available." });
+      return;
+    }
+    if (mode === "others" && effectivePlayerIndex == null) {
+      setMsg({ type: "error", text: "Select a controller player before auto-submitting other players." });
+      return;
+    }
+    const players = mode === "all"
+      ? [0, 1, 2, 3]
+      : [0, 1, 2, 3].filter((p) => p !== effectivePlayerIndex);
+    if (players.length === 0) return;
+
+    setAutoSubmitting(true);
+    try {
+      const mid = resolveMatchId(matchIdInput.trim());
+      const turnIndex = matchState.turnIndex;
+      let resolvedTurnIndex: number | null = null;
+      let pendingPlayersFromServer: number[] = [];
+      for (const p of players) {
+        const res = await fetch(`${GAME_SERVER_URL}/match/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            matchId: mid,
+            turnIndex,
+            playerIndex: p,
+            moves: proposeAutoMoves(p),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (typeof data.expectedTurnIndex === "number") {
+            await loadMatchState();
+            throw new Error(`Turn advanced to ${data.expectedTurnIndex}. Board refreshed; run auto again.`);
+          }
+          throw new Error(`P${p}: ${data.error ?? "auto submit failed"}`);
+        }
+        if (Array.isArray(data.pendingPlayers)) {
+          pendingPlayersFromServer = data.pendingPlayers.filter(
+            (x: unknown) => typeof x === "number" && x >= 0 && x <= 3
+          );
+        }
+        if (data.resolved) {
+          resolvedTurnIndex =
+            typeof data.resolvedTurnIndex === "number"
+              ? data.resolvedTurnIndex
+              : turnIndex;
+          break;
+        }
+      }
+      setMsg({
+        type: "success",
+        text:
+          resolvedTurnIndex != null
+            ? `Auto-moves submitted. Turn ${resolvedTurnIndex} resolved.`
+            : pendingPlayersFromServer.length > 0
+            ? `Auto-moves submitted. Waiting for: ${pendingPlayersFromServer.map((p) => `P${p}`).join(", ")}.`
+            : mode === "all"
+            ? "Auto-moves submitted for all 4 players."
+            : "Auto-moves submitted for the other 3 players.",
+      });
+      setLastSubmitInfo(
+        resolvedTurnIndex != null
+          ? `Turn ${resolvedTurnIndex} resolved.`
+          : pendingPlayersFromServer.length > 0
+          ? `Waiting for ${pendingPlayersFromServer.map((p) => `P${p}`).join(", ")}.`
+          : "Auto-moves submitted."
+      );
+      await loadMatchState();
+    } catch (e) {
+      setMsg({ type: "error", text: (e as Error)?.message ?? "Auto submit failed." });
+    } finally {
+      setAutoSubmitting(false);
+    }
+  };
+
   const playAgain = () => {
     setMatchState(null);
     setMatchFound(null);
@@ -366,6 +572,27 @@ export default function Play(props: PlayPageProps) {
   );
   const hasDuplicateParticipants = participantsSetCount !== uniqueParticipants.size;
   const participantsReady = participantsSetCount === 4 && !hasDuplicateParticipants;
+  const connectedPlayerSlot = address
+    ? participantAddresses.findIndex((p) => p != null && p.toLowerCase() === address.toLowerCase())
+    : -1;
+  const connectedPlayerLabel =
+    connectedPlayerSlot >= 0 ? `Player ${connectedPlayerSlot + 1}` : "Unassigned wallet";
+  const submittedPlayersThisTurn = Array.isArray(matchState?.submittedPlayers)
+    ? matchState.submittedPlayers.filter((p) => Number.isInteger(p) && p >= 0 && p <= 3)
+    : [];
+  const pendingPlayersThisTurn = [0, 1, 2, 3].filter((p) => !submittedPlayersThisTurn.includes(p));
+  const { statusName: parsedStatusName, entriesReceived: parsedEntries } = parseMatchInfoText(matchInfo);
+  const matchCreatedOnChain = parsedStatusName != null;
+  const allEntriesDone = parsedEntries === 4 || parsedStatusName === "Escrowed";
+  const raceReady = parsedStatusName === "Escrowed" || matchState != null;
+  const flowHeadline =
+    step === "lobby"
+      ? "Prepare four players and join queue"
+      : step === "enter"
+      ? "Create and fund the match"
+      : step === "arena"
+      ? "Submit moves each turn"
+      : "Review results and race again";
 
   const stepper = (
     <div className="journey-stepper" role="navigation" aria-label="Journey progress">
@@ -448,6 +675,50 @@ export default function Play(props: PlayPageProps) {
         <>
           {stepper}
 
+          <div className="flow-helper card" aria-live="polite">
+            <div className="flow-helper-head">
+              <div>
+                <h2>Match command center</h2>
+                <p className="flow-helper-objective">
+                  Current objective: <strong>{flowHeadline}</strong>
+                </p>
+              </div>
+              <div className="flow-helper-account">
+                <span className="flow-helper-label">Connected wallet</span>
+                <span className="flow-helper-value">
+                  {shortAddress(address)} ({connectedPlayerLabel})
+                </span>
+              </div>
+            </div>
+            <div className="flow-checklist">
+              <div className={"flow-check-item " + (participantsReady ? "is-done" : "")}>
+                <span>1. Four unique player slots set</span>
+                <strong>{participantsReady ? "Done" : `${participantsSetCount}/4 set`}</strong>
+              </div>
+              <div className={"flow-check-item " + (matchFound ? "is-done" : "")}>
+                <span>2. Queue formed into match</span>
+                <strong>{matchFound ? "Done" : "Pending"}</strong>
+              </div>
+              <div className={"flow-check-item " + (matchCreatedOnChain ? "is-done" : "")}>
+                <span>3. Match created on-chain (owner)</span>
+                <strong>{matchCreatedOnChain ? "Done" : "Pending"}</strong>
+              </div>
+              <div className={"flow-check-item " + (allEntriesDone ? "is-done" : "")}>
+                <span>4. All four players entered</span>
+                <strong>{allEntriesDone ? "Done" : "Pending"}</strong>
+              </div>
+              <div className={"flow-check-item " + (raceReady ? "is-done" : "")}>
+                <span>5. Arena ready / running</span>
+                <strong>{raceReady ? "Done" : "Pending"}</strong>
+              </div>
+            </div>
+            <p className="flow-helper-tip">
+              {step === "arena"
+                ? "Turn flow: choose controller player -> set Token 0/1/2 destinations -> submit move for each player. Turn resolves after all 4 submit (or use Resolve turn now)."
+                : "Use this checklist top-down; each step unlocks the next one."}
+            </p>
+          </div>
+
           {/* Four participants strip — always visible; set wallet per slot, switch MetaMask to act */}
           <div className="participants-strip card">
             <h2 className="participants-strip-title">Four participants (same screen)</h2>
@@ -486,6 +757,10 @@ export default function Play(props: PlayPageProps) {
                 Player slots must be unique wallets (P1, P2, P3, P4 cannot share the same address).
               </p>
             )}
+            <p className={"participants-active-account " + (connectedPlayerSlot >= 0 ? "is-bound" : "is-unbound")}>
+              Active wallet now: <strong>{shortAddress(address)}</strong> ({connectedPlayerLabel})
+              {connectedPlayerSlot < 0 && " - set this wallet to one of the player slots to act in-match."}
+            </p>
           </div>
 
           {/* ─── Lobby ─── */}
@@ -540,6 +815,24 @@ export default function Play(props: PlayPageProps) {
               <div className="journey-hero">
                 <h2>Get ready</h2>
                 <p className="journey-desc">1. Switch to escrow owner → Create match. 2. For each player: switch MetaMask to that participant, then click &quot;Enter as P1/P2/P3/P4&quot;. 3. When 4/4, Start race.</p>
+              </div>
+              <div className="card enter-progress-strip">
+                <div className={"enter-progress-item " + (matchFound ? "is-done" : "")}>
+                  <span className="enter-progress-name">Queue match found</span>
+                  <span className="enter-progress-state">{matchFound ? "Done" : "Pending"}</span>
+                </div>
+                <div className={"enter-progress-item " + (matchCreatedOnChain ? "is-done" : "")}>
+                  <span className="enter-progress-name">Created on-chain</span>
+                  <span className="enter-progress-state">{matchCreatedOnChain ? "Done" : "Pending"}</span>
+                </div>
+                <div className={"enter-progress-item " + (allEntriesDone ? "is-done" : "")}>
+                  <span className="enter-progress-name">4/4 entries paid</span>
+                  <span className="enter-progress-state">{allEntriesDone ? "Done" : parsedEntries != null ? `${parsedEntries}/4` : "Pending"}</span>
+                </div>
+                <div className={"enter-progress-item " + (raceReady ? "is-done" : "")}>
+                  <span className="enter-progress-name">Ready to start</span>
+                  <span className="enter-progress-state">{raceReady ? "Done" : "Pending"}</span>
+                </div>
               </div>
               {/* Match status — auto-refreshes so you see X/4 after each entry */}
               <div className="card journey-card" style={{ textAlign: "left", maxWidth: "520px", borderColor: "rgba(0,229,204,0.3)" }}>
@@ -622,8 +915,14 @@ export default function Play(props: PlayPageProps) {
               {/* Start when 4/4 */}
               <div className="journey-hero">
                 <p className="journey-desc">When status shows Escrowed (4/4), start the race.</p>
-                <button type="button" className="journey-cta" onClick={goToArena} disabled={matchActionLoading}>
-                  {matchActionLoading ? "Starting…" : "3. Start match → Arena"}
+                <button
+                  type="button"
+                  className="journey-cta"
+                  onClick={goToArena}
+                  disabled={matchActionLoading || !allEntriesDone}
+                  title={!allEntriesDone ? "Wait for all 4 entries (Escrowed) before starting." : undefined}
+                >
+                  {matchActionLoading ? "Starting…" : allEntriesDone ? "3. Start match -> Arena" : "Waiting for 4/4 entries"}
                 </button>
               </div>
             </div>
@@ -638,26 +937,130 @@ export default function Play(props: PlayPageProps) {
               <div className="arena-instructions card">
                 <h2 className="arena-instructions-title">How to play</h2>
                 <ul className="arena-instructions-list">
-                  <li>Each turn, <strong>all four players</strong> submit where to move their 3 tokens (tile 0–48).</li>
-                  <li>You have <strong>~6 seconds</strong> per turn. Submit before the timer runs out.</li>
+                  <li>Legal destination: integer tile index <strong>0–48</strong> for active tokens.</li>
+                  <li>Legal step per token: <strong>stay</strong> or move <strong>up 1–2 rows</strong> with at most <strong>1 column sideways</strong> (no backward moves).</li>
+                  <li>Submit one action per player each turn; the turn resolves when all 4 are submitted.</li>
+                  <li>If you want to continue early, use <strong>Resolve turn now</strong>; missing players default to stay put.</li>
+                  <li>Tile sharing is allowed; crowded tiles reduce survival points.</li>
                   <li>Pick a <strong>destination tile</strong> for each token (same tile = stay put). Higher rows = more points.</li>
                   <li><strong>Click a tile</strong> on the board to assign it to your next token, or type numbers below.</li>
                 </ul>
-                {playerIndex != null ? (
+                <details className="arena-rules-panel">
+                  <summary>Rules &amp; Validation</summary>
+                  <ul className="arena-rules-list">
+                    <li>Move checks run on server; illegal moves are rejected with clear alerts.</li>
+                    <li>Trap tiles: {TRAP_TILES.join(", ")} (token is eliminated when landing there).</li>
+                    <li>Reserved start lanes: {START_LANES.map((tiles, p) => `P${p} [${tiles.join(", ")}]`).join(" · ")}</li>
+                    <li>Crowded tile (2+ tokens) lowers survival points for tokens on that tile.</li>
+                  </ul>
+                </details>
+                {effectivePlayerIndex != null ? (
                   <p className="arena-you-are">
-                    You are <span className={`arena-player-badge arena-player-badge-p${playerIndex}`}>Player {playerIndex}</span>
+                    Controlling <span className={`arena-player-badge arena-player-badge-p${effectivePlayerIndex}`}>Player {effectivePlayerIndex}</span>
                     {matchState && (
-                      <span className="arena-your-score"> — Score: {matchState.scores[playerIndex]?.total ?? 0}</span>
+                      <span className="arena-your-score"> — Score: {matchState.scores[effectivePlayerIndex]?.total ?? 0}</span>
                     )}
                   </p>
                 ) : (
-                  <p className="arena-you-are arena-you-spectator">You are not in this match (spectator). Connect with a wallet that entered.</p>
+                  <p className="arena-you-are arena-you-spectator">Select a controller player below to submit moves in local test mode.</p>
                 )}
+                <p className="arena-wallet-hint">
+                  Wallet-linked player:{" "}
+                  {walletLinkedPlayerIndex != null ? `P${walletLinkedPlayerIndex}` : "not detected"}
+                  {" "}· Control mode: {controlMode === "manual" ? "manual local testing" : "wallet linked"}
+                </p>
+              </div>
+
+              <div className="arena-focus-toolbar">
+                <button
+                  type="button"
+                  className="btn-outline"
+                  onClick={() => setShowExampleBoard((v) => !v)}
+                >
+                  {showExampleBoard ? "Hide tutorial board" : "Show tutorial board"}
+                </button>
+                <span className="arena-focus-note">
+                  {effectivePlayerIndex != null
+                    ? `Controller: P${effectivePlayerIndex}.`
+                    : "Pick a controller player below to start moving tokens."}
+                </span>
+              </div>
+
+              <div className="arena-controller-panel card">
+                <h3>Controller (local test mode)</h3>
+                <div className="arena-controller-modes">
+                  <button
+                    type="button"
+                    className={controlMode === "manual" ? "btn-outline arena-control-mode-active" : "btn-outline"}
+                    onClick={() => setControlMode("manual")}
+                  >
+                    Manual player select
+                  </button>
+                  <button
+                    type="button"
+                    className={controlMode === "wallet" ? "btn-outline arena-control-mode-active" : "btn-outline"}
+                    onClick={() => setControlMode("wallet")}
+                    disabled={walletLinkedPlayerIndex == null}
+                    title={walletLinkedPlayerIndex == null ? "Current wallet is not assigned to a player slot." : undefined}
+                  >
+                    Use wallet-linked player
+                  </button>
+                </div>
+                <div className="arena-controller-players">
+                  {[0, 1, 2, 3].map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={
+                        "btn-outline arena-controller-player " +
+                        (effectivePlayerIndex === p ? "is-active" : "")
+                      }
+                      onClick={() => {
+                        setControlMode("manual");
+                        setSelectedControlPlayer(p);
+                      }}
+                    >
+                      Control P{p}
+                    </button>
+                  ))}
+                </div>
+                <div className="arena-controller-auto">
+                  <button
+                    type="button"
+                    className="btn-outline"
+                    onClick={() => submitAutoMoves("others")}
+                    disabled={autoSubmitting || matchState == null || effectivePlayerIndex == null}
+                  >
+                    {autoSubmitting ? "Auto..." : "Auto submit other players"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-outline"
+                    onClick={() => submitAutoMoves("all")}
+                    disabled={autoSubmitting || matchState == null}
+                  >
+                    {autoSubmitting ? "Auto..." : "Auto submit all 4 players"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-outline"
+                    onClick={resolveTurnNow}
+                    disabled={matchActionLoading || autoSubmitting || matchState == null || submittedPlayersThisTurn.length === 0}
+                    title={submittedPlayersThisTurn.length === 0 ? "Submit at least one player move first." : undefined}
+                  >
+                    {matchActionLoading ? "Resolving..." : "Resolve turn now"}
+                  </button>
+                </div>
+                <p className="arena-controller-note">
+                  For local flow testing, you can drive all players from this screen.
+                  {" "}Submitted: {submittedPlayersThisTurn.length ? submittedPlayersThisTurn.map((p) => `P${p}`).join(", ") : "none"}.
+                  {" "}Waiting: {pendingPlayersThisTurn.length ? pendingPlayersThisTurn.map((p) => `P${p}`).join(", ") : "none"}.
+                </p>
               </div>
 
               {/* Two-column layout: example board (left) | arena board when loaded (right) */}
               <div className="arena-boards-row">
-                {/* Example "How it works" board — always visible beside or above the live board */}
+                {showExampleBoard && (
                 <div className="arena-example-board-wrap">
                   <h3 className="arena-example-title">How it works</h3>
                   <div className="arena-example-content">
@@ -676,10 +1079,12 @@ export default function Play(props: PlayPageProps) {
                             );
                             const tokenClass = tokensHere[0] ? `token-p${tokensHere[0].p} has-token` : "";
                             const rowClass = row === 0 ? " game-tile-row-finish" : row === 6 ? " game-tile-row-start" : "";
+                            const homeOwner = START_LANES.findIndex((tiles) => tiles.includes(tile));
+                            const homeClass = homeOwner >= 0 ? ` game-tile-home-p${homeOwner}` : "";
                             return (
                               <div
                                 key={`ex-${row}-${col}`}
-                                className={`example-tile ${tokenClass} ${rowClass}`}
+                                className={`example-tile ${tokenClass} ${rowClass}${homeClass}`}
                                 title={`Tile ${tile}${tokensHere.length ? " — " + tokensHere.map(({ p, t }) => `P${p} token ${t}`).join(", ") : ""}`}
                               >
                                 <span className="example-tile-id">{tile}</span>
@@ -712,6 +1117,7 @@ export default function Play(props: PlayPageProps) {
                     </ul>
                   </div>
                 </div>
+                )}
 
                 {!matchState ? (
                   <div className="arena-board-placeholder card">
@@ -724,38 +1130,41 @@ export default function Play(props: PlayPageProps) {
                   <>
                     <div className="arena-live-section">
                       {/* "Your turn" highlight when you're a participant */}
-                      {playerIndex != null && (
+                      {canControlBoard && (
                         <div className="arena-your-turn-banner" role="status" aria-live="polite">
                           <span className="arena-your-turn-glow" aria-hidden />
-                          <span className="arena-your-turn-text">Your turn — choose destinations and submit below</span>
-                          {matchState.turnDeadlineMs != null && (
-                            <span className="arena-your-turn-timer">
-                              {Math.max(0, Math.ceil((matchState.turnDeadlineMs - Date.now()) / 1000))}s left
-                            </span>
-                          )}
+                          <span className="arena-your-turn-text">Control P{effectivePlayerIndex} — choose destinations and submit</span>
                         </div>
                       )}
 
                       <div className="game-hud">
-                        <span className="turn-badge">
-                          Turn {matchState.turnIndex}
-                          {matchState.turnDeadlineMs != null && (
-                            <span className="turn-timer">
-                              — <span className="turn-timer-value">{Math.max(0, Math.ceil((matchState.turnDeadlineMs - Date.now()) / 1000))}</span>s left
-                            </span>
-                          )}
-                        </span>
+                        <span className="turn-badge">Turn {matchState.turnIndex}</span>
                         <div className="scores">
                           {[0, 1, 2, 3].map((i) => (
-                            <span key={i} className={`score-pill ${playerIndex === i ? "score-pill-you" : ""}`}>
+                            <span key={i} className={`score-pill ${effectivePlayerIndex === i ? "score-pill-you" : ""}`}>
                               P{i}: {matchState.scores[i]?.total ?? 0}
                             </span>
                           ))}
                         </div>
                       </div>
 
-                      {playerIndex != null && (
-                        <p className="arena-board-hint">Click a tile to set <strong>Token {selectedTokenForMove}</strong> destination</p>
+                      {recentResolvedTurn != null && (
+                        <div className="arena-resolved-feed" role="status" aria-live="polite">
+                          <strong>Turn {recentResolvedTurn} resolved:</strong>
+                          {recentResolvedMoves.length === 0 ? (
+                            <span> no token changed tiles this turn.</span>
+                          ) : (
+                            <span>
+                              {" "}
+                              {recentResolvedMoves.map((m) => `P${m.player} T${m.token} ${m.from}->${m.to}`).join(" · ")}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {lastSubmitInfo && <p className="arena-submit-info">{lastSubmitInfo}</p>}
+
+                      {canControlBoard && (
+                        <p className="arena-board-hint">Click a tile to set <strong>Token {selectedTokenForMove}</strong> destination for P{effectivePlayerIndex}</p>
                       )}
                       <div className="game-board-container arena-board-main">
                     <div className="game-board-wrap">
@@ -777,9 +1186,9 @@ export default function Play(props: PlayPageProps) {
                               })
                             );
                             const tokenClasses = tokensHere.map(({ p }) => `token-p${p} has-token`);
-                            const isSelectable = playerIndex != null;
+                            const isSelectable = canControlBoard;
                             const handleTileClick = () => {
-                              if (playerIndex == null) return;
+                              if (!canControlBoard) return;
                               if (selectedTokenForMove === 0) setMatchMove0(String(tile));
                               else if (selectedTokenForMove === 1) setMatchMove1(String(tile));
                               else setMatchMove2(String(tile));
@@ -788,14 +1197,22 @@ export default function Play(props: PlayPageProps) {
                               matchMove0 === String(tile) ? " game-tile-dest-0" :
                               matchMove1 === String(tile) ? " game-tile-dest-1" :
                               matchMove2 === String(tile) ? " game-tile-dest-2" : "";
+                            const moveClass =
+                              recentResolvedMoves.some((m) => m.to === tile)
+                                ? " game-tile-moved-to"
+                                : recentResolvedMoves.some((m) => m.from === tile)
+                                ? " game-tile-moved-from"
+                                : "";
                             const rowClass = row === 0 ? " game-tile-row-finish" : row === 6 ? " game-tile-row-start" : "";
+                            const homeOwner = START_LANES.findIndex((tiles) => tiles.includes(tile));
+                            const homeClass = homeOwner >= 0 ? ` game-tile-home-p${homeOwner}` : "";
                             const tileContent = (
                               <>
                                 <span className="game-tile-id" title={`Tile ${tile}`}>{tile}</span>
                                 {tokensHere.length > 0 && (
                                   <span className="game-tile-racers" aria-hidden>
                                     {tokensHere.map(({ p, t }) =>
-                                      p === playerIndex ? (
+                                      p === effectivePlayerIndex ? (
                                         <span
                                           key={`${p}-${t}`}
                           className={`game-racer token-p${p} game-racer-draggable`}
@@ -828,8 +1245,12 @@ export default function Play(props: PlayPageProps) {
                             const handleDrop = (e: React.DragEvent) => {
                               e.preventDefault();
                               setDragOverTile(null);
-                              if (playerIndex == null) return;
+                              if (!canControlBoard) return;
                               const tokenIndex = parseInt(e.dataTransfer.getData(DRAG_TOKEN_KEY), 10);
+                              if (![0, 1, 2].includes(tokenIndex)) {
+                                setMsg({ type: "error", text: "Drag one of your tokens (0, 1, or 2)." });
+                                return;
+                              }
                               if (tokenIndex === 0) setMatchMove0(String(tile));
                               else if (tokenIndex === 1) setMatchMove1(String(tile));
                               else if (tokenIndex === 2) setMatchMove2(String(tile));
@@ -840,7 +1261,15 @@ export default function Play(props: PlayPageProps) {
                               <button
                                 type="button"
                                 key={`${row}-${col}`}
-                                className={"game-tile game-tile-selectable " + (tokenClasses[0] ?? "") + rowClass + destClass + (dragOverTile === tile ? " game-tile-drag-over" : "")}
+                                className={
+                                  "game-tile game-tile-selectable " +
+                                  (tokenClasses[0] ?? "") +
+                                  rowClass +
+                                  homeClass +
+                                  destClass +
+                                  moveClass +
+                                  (dragOverTile === tile ? " game-tile-drag-over" : "")
+                                }
                                 title={`Tile ${tile} — Click or drag a token here`}
                                 onClick={handleTileClick}
                                 onDragOver={handleDragOver}
@@ -857,7 +1286,7 @@ export default function Play(props: PlayPageProps) {
                             ) : (
                               <div
                                 key={`${row}-${col}`}
-                                className={"game-tile " + (tokenClasses[0] ?? "") + rowClass}
+                                className={"game-tile " + (tokenClasses[0] ?? "") + rowClass + homeClass + moveClass}
                                 title={`Tile ${tile}${tokensHere.length ? " " + tokensHere.map(({ p, t }) => `P${p} token ${t}`).join(", ") : ""}`}
                               >
                                 {tileContent}
@@ -871,10 +1300,20 @@ export default function Play(props: PlayPageProps) {
                       </div>
                     </div>
 
-                    {playerIndex != null && (
+                    {canControlBoard && (
                     <div className="arena-moves-panel card">
                       <h2>Your move this turn</h2>
                       <p className="arena-moves-desc"><strong>Drag a token</strong> to a tile, or pick a token and <strong>click a tile</strong>, or type tile numbers (0–48).</p>
+                      <div className="arena-turn-steps">
+                        <span className="arena-turn-step">1. Select token</span>
+                        <span className="arena-turn-step">2. Pick destination tile</span>
+                        <span className="arena-turn-step">3. Submit move</span>
+                      </div>
+                      <div className="arena-destination-summary">
+                        <span className="arena-destination-chip">T0 to {matchMove0 || "-"}</span>
+                        <span className="arena-destination-chip">T1 to {matchMove1 || "-"}</span>
+                        <span className="arena-destination-chip">T2 to {matchMove2 || "-"}</span>
+                      </div>
                       <div className="arena-token-selector" role="group" aria-label="Choose which token to set">
                         <span className="arena-token-selector-label">Set destination for:</span>
                         {([0, 1, 2] as const).map((t) => (
@@ -898,7 +1337,7 @@ export default function Play(props: PlayPageProps) {
                             max={48}
                             value={matchMove0}
                             onChange={(e) => setMatchMove0(e.target.value)}
-                            placeholder={String(matchState.tokenPositions?.[playerIndex]?.[0] ?? "0")}
+                            placeholder={String(matchState.tokenPositions?.[effectivePlayerIndex!]?.[0] ?? "0")}
                           />
                         </div>
                         <div className="arena-move-row">
@@ -909,7 +1348,7 @@ export default function Play(props: PlayPageProps) {
                             max={48}
                             value={matchMove1}
                             onChange={(e) => setMatchMove1(e.target.value)}
-                            placeholder={String(matchState.tokenPositions?.[playerIndex]?.[1] ?? "1")}
+                            placeholder={String(matchState.tokenPositions?.[effectivePlayerIndex!]?.[1] ?? "1")}
                           />
                         </div>
                         <div className="arena-move-row">
@@ -920,7 +1359,7 @@ export default function Play(props: PlayPageProps) {
                             max={48}
                             value={matchMove2}
                             onChange={(e) => setMatchMove2(e.target.value)}
-                            placeholder={String(matchState.tokenPositions?.[playerIndex]?.[2] ?? "2")}
+                            placeholder={String(matchState.tokenPositions?.[effectivePlayerIndex!]?.[2] ?? "2")}
                           />
                         </div>
                       </div>
@@ -929,7 +1368,7 @@ export default function Play(props: PlayPageProps) {
                           type="button"
                           className="btn-outline"
                           onClick={() => {
-                            const pos = matchState.tokenPositions?.[playerIndex];
+                            const pos = matchState.tokenPositions?.[effectivePlayerIndex!];
                             if (pos?.length === 3) {
                               setMatchMove0(String(pos[0]));
                               setMatchMove1(String(pos[1]));
@@ -939,7 +1378,12 @@ export default function Play(props: PlayPageProps) {
                         >
                           Reset to current
                         </button>
-                        <button type="button" className="arena-submit-move" onClick={submitMatchAction} disabled={matchActionLoading}>
+                        <button
+                          type="button"
+                          className="arena-submit-move"
+                          onClick={submitControlledMove}
+                          disabled={matchActionLoading || autoSubmitting || !canControlBoard}
+                        >
                           {matchActionLoading ? "Submitting…" : "Submit move"}
                         </button>
                       </div>

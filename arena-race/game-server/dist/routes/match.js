@@ -45,6 +45,7 @@ const db_1 = require("../db");
 const db_2 = require("../db");
 const TurnLoop = __importStar(require("../turnLoop/TurnLoop"));
 const replayFromDb_1 = require("../replayFromDb");
+const MATCH_ID_HEX_32 = /^0x[0-9a-fA-F]{64}$/;
 function matchRouter() {
     const router = (0, express_1.Router)();
     /** GET /match/status?matchId=0x...&escrowAddress=0x... — match status from chain. Use escrowAddress from request so frontend and server always use same contract. */
@@ -156,19 +157,84 @@ function matchRouter() {
         }
         res.status(200).json({ status: "started" });
     });
-    /** POST /match/action — body: { matchId, turnIndex, playerIndex, moves: [n,n,n] }. Idempotent. */
+    /** POST /match/action — body: { matchId, turnIndex, playerIndex, moves: [n,n,n] }. Manual mode: submit action; resolve when all 4 submitted. */
     router.post("/action", (req, res) => {
         const { matchId, turnIndex, playerIndex, moves } = req.body ?? {};
-        if (!matchId || typeof turnIndex !== "number" || typeof playerIndex !== "number" || !Array.isArray(moves) || moves.length !== 3) {
+        if (!MATCH_ID_HEX_32.test(String(matchId ?? ""))) {
+            res.status(400).json({ error: "matchId must be 0x + 64 hex chars (bytes32)" });
+            return;
+        }
+        if (typeof turnIndex !== "number" ||
+            !Number.isInteger(turnIndex) ||
+            typeof playerIndex !== "number" ||
+            !Number.isInteger(playerIndex) ||
+            !Array.isArray(moves) ||
+            moves.length !== 3) {
             res.status(400).json({ error: "matchId, turnIndex, playerIndex, moves[3] required" });
             return;
         }
-        const result = TurnLoop.submitAction(matchId, turnIndex, playerIndex, [moves[0], moves[1], moves[2]], Date.now());
-        if (!result.ok) {
-            res.status(400).json({ error: result.error });
+        const move0 = Number(moves[0]);
+        const move1 = Number(moves[1]);
+        const move2 = Number(moves[2]);
+        const db = (0, db_1.getDbInstance)();
+        if (!db) {
+            res.status(500).json({ error: "db not available" });
             return;
         }
-        res.status(200).json({ status: "accepted" });
+        const result = TurnLoop.submitAction(matchId, turnIndex, playerIndex, [move0, move1, move2], Date.now());
+        if (!result.ok) {
+            const statusCode = typeof result.expectedTurnIndex === "number" ? 409 : 400;
+            res.status(statusCode).json({
+                error: result.error,
+                expectedTurnIndex: result.expectedTurnIndex,
+            });
+            return;
+        }
+        const outcome = TurnLoop.resolveTurnIfReady(db, matchId);
+        if (!outcome.ok) {
+            res.status(400).json({ error: outcome.error ?? "failed to process action" });
+            return;
+        }
+        res.status(200).json({
+            status: "accepted",
+            resolved: outcome.resolved,
+            resolvedTurnIndex: outcome.resolvedTurnIndex,
+            nextTurnIndex: outcome.nextTurnIndex,
+            turnIndex: outcome.turnIndex,
+            submittedPlayers: outcome.submittedPlayers,
+            pendingPlayers: outcome.pendingPlayers,
+        });
+    });
+    /** POST /match/resolve-turn — body: { matchId }. Manual mode fallback: resolve current turn with submitted actions + defaults for missing players. */
+    router.post("/resolve-turn", (req, res) => {
+        const matchId = req.body?.matchId;
+        if (!MATCH_ID_HEX_32.test(String(matchId ?? ""))) {
+            res.status(400).json({ error: "matchId must be 0x + 64 hex chars (bytes32)" });
+            return;
+        }
+        const db = (0, db_1.getDbInstance)();
+        if (!db) {
+            res.status(500).json({ error: "db not available" });
+            return;
+        }
+        const outcome = TurnLoop.resolveTurnNow(db, matchId);
+        if (!outcome.ok) {
+            res.status(400).json({
+                error: outcome.error ?? "failed to resolve turn",
+                turnIndex: outcome.turnIndex,
+                submittedPlayers: outcome.submittedPlayers,
+                pendingPlayers: outcome.pendingPlayers,
+            });
+            return;
+        }
+        res.status(200).json({
+            status: "resolved",
+            resolved: outcome.resolved,
+            resolvedTurnIndex: outcome.resolvedTurnIndex,
+            nextTurnIndex: outcome.nextTurnIndex,
+            submittedPlayers: outcome.submittedPlayers,
+            pendingPlayers: outcome.pendingPlayers,
+        });
     });
     /**
      * GET /match/replay?matchId=0x...
@@ -189,7 +255,7 @@ function matchRouter() {
             res.status(500).json({ match: false, message: String(e.message) });
         }
     });
-    /** GET /match/state?matchId=0x... — current board, scores, turn, time remaining */
+    /** GET /match/state?matchId=0x... — current board, scores, turn, pending submissions */
     router.get("/state", (req, res) => {
         const matchId = req.query.matchId;
         if (!matchId) {
@@ -198,6 +264,8 @@ function matchRouter() {
         }
         const state = TurnLoop.getMatchState(matchId);
         const deadline = TurnLoop.getTurnDeadline(matchId);
+        const submittedPlayers = TurnLoop.getSubmittedPlayers(matchId);
+        const pendingPlayers = [0, 1, 2, 3].filter((p) => !submittedPlayers.includes(p));
         if (!state) {
             res.status(404).json({ error: "match not running or not found" });
             return;
@@ -208,6 +276,8 @@ function matchRouter() {
             scores: state.scores,
             overtakeCounts: state.overtakeCounts,
             turnDeadlineMs: deadline ?? undefined,
+            submittedPlayers,
+            pendingPlayers,
         });
     });
     return router;

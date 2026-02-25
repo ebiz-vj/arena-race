@@ -8,10 +8,10 @@ export const DEFAULT_TURNS_PER_MATCH = 15;
 
 /** Board A start positions (runMatch.ts). */
 export const DEFAULT_START = [
-  [0, 1, 2],
-  [3, 4, 5],
-  [6, 7, 8],
-  [9, 10, 11],
+  [42, 43, 44], // P0 bottom-left lane
+  [45, 46, 47], // P1 bottom-right lane
+  [35, 36, 37], // P2 mid-bottom left lane
+  [38, 39, 40], // P3 mid-bottom right lane
 ] as const;
 
 export const DEFAULT_BOARD = { trapTiles: [12, 24, 36] };

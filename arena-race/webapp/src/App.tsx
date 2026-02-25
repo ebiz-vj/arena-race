@@ -8,6 +8,7 @@ import Layout from "./components/Layout";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Dashboard from "./pages/Dashboard";
 import Play from "./pages/Play";
+import GameSimulator from "./pages/GameSimulator";
 import Rewards from "./pages/Rewards";
 import Wallet from "./pages/Wallet";
 import Account from "./pages/Account";
@@ -219,11 +220,15 @@ export default function App() {
       ]);
       if (stateRes.ok) {
         const data = await stateRes.json();
+        const submittedPlayers = Array.isArray(data.submittedPlayers)
+          ? data.submittedPlayers.filter((p: unknown) => typeof p === "number" && Number.isInteger(p) && p >= 0 && p <= 3)
+          : [];
         setMatchState({
           turnIndex: data.turnIndex,
           tokenPositions: data.tokenPositions,
           scores: data.scores?.map((s: { total: number }) => ({ total: s.total })) ?? [],
           turnDeadlineMs: data.turnDeadlineMs,
+          submittedPlayers,
         });
       } else {
         setMatchState(null);
@@ -291,20 +296,91 @@ export default function App() {
     }
   };
 
-  const submitMatchAction = async () => {
-    if (!matchIdInput.trim() || typeof playerIndex !== "number" || matchState == null) return;
+  const submitMatchAction = async (
+    opts?: { playerIndexOverride?: number; moves?: [number, number, number] }
+  ): Promise<boolean> => {
+    if (!matchIdInput.trim() || matchState == null) return false;
+    const effectivePlayerIndex =
+      typeof opts?.playerIndexOverride === "number"
+        ? opts.playerIndexOverride
+        : playerIndex;
+    if (
+      typeof effectivePlayerIndex !== "number" ||
+      effectivePlayerIndex < 0 ||
+      effectivePlayerIndex > 3
+    ) {
+      setMsg({
+        type: "error",
+        text: "Select which player you want to control before submitting a move.",
+      });
+      return false;
+    }
     const mid = zeroPadValue(resolveMatchId(matchIdInput), 32);
-    const cur = matchState.tokenPositions?.[playerIndex];
-    const fallback = (i: number) => (cur != null && cur[i] >= 0 && cur[i] <= 48 ? cur[i] : i);
-    let m0 = parseInt(matchMove0.trim(), 10);
-    let m1 = parseInt(matchMove1.trim(), 10);
-    let m2 = parseInt(matchMove2.trim(), 10);
-    if (isNaN(m0) || m0 < 0 || m0 > 48) m0 = fallback(0);
-    if (isNaN(m1) || m1 < 0 || m1 > 48) m1 = fallback(1);
-    if (isNaN(m2) || m2 < 0 || m2 > 48) m2 = fallback(2);
-    if ([m0, m1, m2].some((n) => n < 0 || n > 48)) {
-      setMsg({ type: "error", text: "Moves must be tile indices 0–48" });
-      return;
+    const cur = matchState.tokenPositions?.[effectivePlayerIndex];
+    const currentTiles: [number, number, number] = [
+      Number(cur?.[0] ?? 0),
+      Number(cur?.[1] ?? 1),
+      Number(cur?.[2] ?? 2),
+    ];
+    const parseMoveFromInput = (raw: string, token: 0 | 1 | 2): number | null => {
+      if (currentTiles[token] < 0) return -1;
+      const trimmed = raw.trim();
+      if (trimmed === "") return null;
+      const n = Number(trimmed);
+      if (!Number.isInteger(n) || n < 0 || n > 48) return null;
+      return n;
+    };
+    const parseMoveFromOverride = (value: number, token: 0 | 1 | 2): number | null => {
+      if (currentTiles[token] < 0) return -1;
+      if (!Number.isInteger(value) || value < 0 || value > 48) return null;
+      return value;
+    };
+    const parsedMoves: [number | null, number | null, number | null] = opts?.moves
+      ? [
+          parseMoveFromOverride(opts.moves[0], 0),
+          parseMoveFromOverride(opts.moves[1], 1),
+          parseMoveFromOverride(opts.moves[2], 2),
+        ]
+      : [
+          parseMoveFromInput(matchMove0, 0),
+          parseMoveFromInput(matchMove1, 1),
+          parseMoveFromInput(matchMove2, 2),
+        ];
+    const firstInvalidIndex = parsedMoves.findIndex((v) => v == null);
+    if (firstInvalidIndex >= 0) {
+      setMsg({
+        type: "error",
+        text: `Invalid destination for Token ${firstInvalidIndex}. Use an integer tile index 0–48.`,
+      });
+      return false;
+    }
+    const normalizedMoves: [number, number, number] = [
+      parsedMoves[0] as number,
+      parsedMoves[1] as number,
+      parsedMoves[2] as number,
+    ];
+    const isLegalStep = (from: number, to: number): boolean => {
+      if (from < 0) return to === -1;
+      if (to === from) return true;
+      const fromRow = Math.floor(from / 7);
+      const fromCol = from % 7;
+      const toRow = Math.floor(to / 7);
+      const toCol = to % 7;
+      const rowAdvance = fromRow - toRow;
+      if (rowAdvance < 0 || rowAdvance > 2) return false;
+      if (Math.abs(toCol - fromCol) > 1) return false;
+      return true;
+    };
+    for (let token = 0; token < 3; token++) {
+      const from = currentTiles[token];
+      const to = normalizedMoves[token];
+      if (!isLegalStep(from, to)) {
+        setMsg({
+          type: "error",
+          text: `Illegal move for Token ${token}. Stay put or move up 1-2 rows with max 1 column sideways.`,
+        });
+        return false;
+      }
     }
     setMatchActionLoading(true);
     setMsg(null);
@@ -312,17 +388,81 @@ export default function App() {
       const res = await fetch(`${GAME_SERVER_URL}/match/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchId: mid, turnIndex: matchState.turnIndex, playerIndex, moves: [m0, m1, m2] }),
+        body: JSON.stringify({
+          matchId: mid,
+          turnIndex: matchState.turnIndex,
+          playerIndex: effectivePlayerIndex,
+          moves: normalizedMoves,
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        setMsg({ type: "success", text: "Move submitted." });
+        const pendingPlayers = Array.isArray(data.pendingPlayers)
+          ? data.pendingPlayers.filter((p: unknown) => typeof p === "number" && p >= 0 && p <= 3)
+          : [];
+        setMsg({
+          type: "success",
+          text: data.resolved
+            ? `Move submitted for P${effectivePlayerIndex}. Turn ${data.resolvedTurnIndex} resolved.`
+            : pendingPlayers.length > 0
+            ? `Move submitted for P${effectivePlayerIndex}. Waiting for: ${pendingPlayers.map((p: number) => `P${p}`).join(", ")}.`
+            : `Move submitted for P${effectivePlayerIndex}.`,
+        });
         await loadMatchState();
+        return true;
       } else {
+        if (typeof data.expectedTurnIndex === "number") {
+          setMsg({
+            type: "error",
+            text: `Turn already advanced. Expected turn ${data.expectedTurnIndex}. Board refreshed; submit again.`,
+          });
+          await loadMatchState();
+          return false;
+        }
         setMsg({ type: "error", text: data.error ?? "Submit failed" });
+        return false;
       }
     } catch (e) {
       setMsg({ type: "error", text: (e as Error)?.message ?? "Submit failed" });
+      return false;
+    } finally {
+      setMatchActionLoading(false);
+    }
+  };
+
+  const resolveTurnNow = async (): Promise<boolean> => {
+    if (!matchIdInput.trim()) return false;
+    const mid = zeroPadValue(resolveMatchId(matchIdInput.trim()), 32);
+    setMatchActionLoading(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`${GAME_SERVER_URL}/match/resolve-turn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchId: mid }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const pendingPlayers = Array.isArray(data.pendingPlayers)
+          ? data.pendingPlayers.filter((p: unknown) => typeof p === "number" && p >= 0 && p <= 3)
+          : [];
+        setMsg({
+          type: "error",
+          text: data.error
+            ? `${data.error}${pendingPlayers.length ? ` (Waiting for: ${pendingPlayers.map((p: number) => `P${p}`).join(", ")})` : ""}`
+            : "Could not resolve turn.",
+        });
+        return false;
+      }
+      setMsg({
+        type: "success",
+        text: `Turn ${data.resolvedTurnIndex} resolved manually.`,
+      });
+      await loadMatchState();
+      return true;
+    } catch (e) {
+      setMsg({ type: "error", text: (e as Error)?.message ?? "Resolve turn failed" });
+      return false;
     } finally {
       setMatchActionLoading(false);
     }
@@ -773,6 +913,7 @@ export default function App() {
     loadMatchState,
     startMatchThenLoad,
     submitMatchAction,
+    resolveTurnNow,
     createMatchWithId,
     enterMatch,
     fetchMatch,
@@ -792,6 +933,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/play" element={<Play key={playKey} {...playProps} />} />
+            <Route path="/simulator" element={<GameSimulator />} />
+            <Route path="/sandbox" element={<GameSimulator />} />
             <Route path="/rewards" element={<Rewards />} />
             <Route path="/wallet" element={<Wallet />} />
             <Route path="/account" element={<Account />} />
